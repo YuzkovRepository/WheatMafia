@@ -20,6 +20,17 @@
         />
         <div class="flex flex-wrap gap-1.5">
           <button
+            v-for="r in regionTabs"
+            :key="r.key"
+            @click="region = r.key"
+            class="px-3 py-1 rounded-lg text-xs font-semibold transition"
+            :class="region === r.key ? 'bg-stone-800 text-amber-300' : 'bg-stone-200 text-stone-600 hover:bg-stone-300'"
+          >
+            {{ r.label }}
+          </button>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <button
             v-for="t in tabs"
             :key="t.key"
             @click="tab = t.key"
@@ -42,6 +53,11 @@
             <div class="flex-1 min-w-0">
               <div class="font-semibold text-stone-800">
                 {{ p.title }}
+                <span
+                  v-if="regionOf(p.code)"
+                  class="ml-1 px-1.5 py-0.5 rounded-md bg-stone-100 text-[11px] font-semibold text-stone-600 align-middle"
+                >{{ regionOf(p.code)!.flag }} {{ regionOf(p.code)!.name }}</span>
+                <span v-else class="ml-1 px-1.5 py-0.5 rounded-md bg-stone-100 text-[11px] text-stone-400 align-middle">🌍 общий</span>
                 <span v-if="p.legality === 'ILLEGAL'" class="ml-1 text-[11px] font-semibold text-red-600">🚫 нелегально</span>
               </div>
               <div class="text-xs text-stone-500">
@@ -85,6 +101,34 @@ const tabs = [
   { key: 'GOODS' as const, label: '🍷 Товары' }
 ]
 
+/* ---------- страна продукта ---------- */
+const REGIONS: Record<string, { flag: string; name: string }> = {
+  ITALY: { flag: '🇮🇹', name: 'Италия' },
+  JAPAN: { flag: '🇯🇵', name: 'Япония' },
+  EGYPT: { flag: '🇪🇬', name: 'Египет' },
+  BRAZIL: { flag: '🇧🇷', name: 'Бразилия' }
+}
+
+const region = ref<'ALL' | string>('ALL')
+const regionTabs = [
+  { key: 'ALL', label: '🌍 Все страны' },
+  ...Object.entries(REGIONS).map(([key, r]) => ({ key, label: `${r.flag} ${r.name}` }))
+]
+
+// страна продукта = страна здания, где он производится (у культуры — её грядки)
+const regionCode = (code: string): string | null => {
+  for (const r of catalog.recipes) {
+    if (r.outputCode !== code) continue
+    const reg = (catalog.byCode(r.factoryCode) as any)?.region
+    if (reg) return reg
+  }
+  return null
+}
+const regionOf = (code: string) => {
+  const c = regionCode(code)
+  return c ? (REGIONS[c] ?? { flag: '🌍', name: c }) : null
+}
+
 const kindLabel = (k: string) =>
   k === 'CROP' ? 'Культура' : k === 'MATERIAL' ? 'Материал' : 'Товар'
 
@@ -92,6 +136,7 @@ const list = computed(() => {
   const q = query.value.trim().toLowerCase()
   return catalog.products.filter(p =>
     (tab.value === 'ALL' || p.kind === tab.value) &&
+    (region.value === 'ALL' || regionCode(p.code) === region.value) &&
     (!q || p.title.toLowerCase().includes(q) || p.code.toLowerCase().includes(q))
   )
 })
@@ -108,7 +153,12 @@ const makers = (code: string) =>
         where: f?.kind === 'CROP' ? 'Выращивается на грядке' : (f?.title ?? r.factoryCode),
         time: r.productionTime,
         inputs: (r.inputs ?? [])
-          .map(i => `${productEmoji(i.code)} ${i.title || titleOf(i.code)} ×${i.qty}`)
+          .map(i => {
+            const own = regionCode(code)
+            const rc = regionCode(i.code)
+            const flag = rc && rc !== own ? ` ${REGIONS[rc]?.flag ?? '🌍'}` : ''
+            return `${productEmoji(i.code)} ${i.title || titleOf(i.code)}${flag} ×${i.qty}`
+          })
           .join(', ')
       }
     })

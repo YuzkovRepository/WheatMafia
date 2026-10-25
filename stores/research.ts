@@ -2,19 +2,39 @@ import { defineStore } from 'pinia'
 
 export interface ResearchCost {
   code: string
+  title?: string
   qty: number
+}
+
+export interface RecipeIngredient {
+  code: string
+  title: string
+  qty: number
+}
+
+export interface RecipePreview {
+  factoryCode: string
+  factoryTitle: string
+  outputCode: string
+  outputTitle: string
+  outputQty: number
+  productionTime: number
+  inputs: RecipeIngredient[]
 }
 
 export interface ResearchNode {
   code: string
   title: string
   stage: number
-  factoryCode: string
-  outputCode: string
+  factoryCode: string | null
+  factoryTitle: string | null
+  outputCode: string | null
+  outputTitle: string | null
   cost: ResearchCost[]
   requires: string[]
   unlocked: boolean
   available: boolean
+  unlocksRecipes: RecipePreview[]
 }
 
 export interface ResearchTree {
@@ -44,7 +64,6 @@ export const useResearchStore = defineStore('research', {
   getters: {
     region: (s): string => s.tree?.region ?? '',
 
-    // узлы, сгруппированные по этапам
     byStage: (s): Map<number, ResearchNode[]> => {
       const m = new Map<number, ResearchNode[]>()
       for (const n of s.tree?.nodes ?? []) {
@@ -55,25 +74,27 @@ export const useResearchStore = defineStore('research', {
       return m
     },
 
-    // можно ли позволить себе cost данного узла (по текущему складу из дерева)
     canAfford: (s) => (node: ResearchNode): boolean => {
       const storage = s.tree?.storage ?? {}
       return node.cost.every(c => (storage[c.code] ?? 0) >= c.qty)
     },
 
-    // сколько чего не хватает для узла
     missingFor: (s) => (node: ResearchNode): ResearchCost[] => {
       const storage = s.tree?.storage ?? {}
       return node.cost
-        .map(c => ({ code: c.code, qty: Math.max(0, c.qty - (storage[c.code] ?? 0)) }))
+        .map(c => ({ code: c.code, title: c.title, qty: Math.max(0, c.qty - (storage[c.code] ?? 0)) }))
         .filter(c => c.qty > 0)
     },
 
-    // узлы, которые прямо сейчас можно исследовать (available + хватает ресурсов)
     readyToOpen(): ResearchNode[] {
       return (this.tree?.nodes ?? []).filter(
         n => n.available && !n.unlocked && this.canAfford(n)
       )
+    },
+
+    // какие research-коды открыты (для фильтра зданий)
+    unlockedCodes(): Set<string> {
+      return new Set((this.tree?.nodes ?? []).filter(n => n.unlocked).map(n => n.code))
     }
   },
 

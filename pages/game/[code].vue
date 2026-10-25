@@ -168,12 +168,12 @@
           @object-click="onObjectClick"
         />
 
-        <!-- режим переноса склада -->
+        <!-- режим переноса (склад или завод) -->
         <div
           v-if="moveObj"
           class="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 px-4 py-2 rounded-xl bg-amber-500 text-stone-900 shadow-xl border border-amber-300/60"
         >
-          <span class="text-sm font-semibold">Выберите новое место для склада</span>
+          <span class="text-sm font-semibold">Выберите новое место: {{ moveTitle }}</span>
           <button @click="cancelMove" class="px-2 py-0.5 rounded-lg bg-stone-900/15 hover:bg-stone-900/25 text-sm font-semibold">
             Отмена
           </button>
@@ -394,6 +394,15 @@
           <p v-if="itemsForTab.length === 0" class="text-stone-500 text-center py-8">
             В этом разделе пока ничего нет.
           </p>
+
+          <!-- подсказка про скрытые здания -->
+          <p
+            v-if="activeTab === 'BUILDING' && hiddenBuildingsCount > 0"
+            class="mt-3 text-xs text-stone-500 text-center"
+          >
+            Ещё {{ hiddenBuildingsCount }} {{ plural(hiddenBuildingsCount, 'здание', 'здания', 'зданий') }}
+            откроются по мере исследований 🧪
+          </p>
         </div>
 
         <!-- Панель сведений: наведённый (или выбранный) элемент -->
@@ -513,7 +522,15 @@
               {{ activeFactoryItem?.title ?? activeFactory.building }}
             </h2>
           </div>
-          <button @click="closeFactory" class="text-stone-500 hover:text-stone-800 text-2xl leading-none">×</button>
+          <div class="flex items-center gap-2">
+            <button
+              @click="startMoveFactory"
+              class="px-3 py-1.5 rounded-xl font-semibold text-sm bg-amber-500 hover:bg-amber-400 text-stone-900"
+            >
+              Переместить
+            </button>
+            <button @click="closeFactory" class="text-stone-500 hover:text-stone-800 text-2xl leading-none">×</button>
+          </div>
         </div>
 
         <div class="p-5 overflow-y-auto space-y-3">
@@ -638,6 +655,15 @@ const researchStore = useResearchStore()
 
 const code = computed(() => String(route.params.code || '').toUpperCase())
 
+// русское склонение: 1 здание, 2 здания, 5 зданий
+const plural = (n: number, one: string, few: string, many: string): string => {
+  const m10 = n % 10
+  const m100 = n % 100
+  if (m10 === 1 && m100 !== 11) return one
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few
+  return many
+}
+
 const builderOpen = ref(false)
 const activeTab = ref<'CROP' | 'BUILDING'>('CROP')
 const selectedCode = ref<string | null>(null)
@@ -661,12 +687,18 @@ onBeforeUnmount(() => { if (tick) clearInterval(tick) })
 
 const itemsForTab = computed<FactoryItem[]>(() => {
   if (activeTab.value === 'CROP') {
-    // только культуры своего региона (общие с region == null — тоже)
     return catalogStore.cropsForRegion(researchStore.region) ?? []
   }
-  return (catalogStore.buildingsForUi ?? []).filter(
-    b => b.code !== 'warehouse' && b.code !== 'trader'
+  return catalogStore.buildingsAvailableFor(
+    researchStore.unlockedCodes,
+    researchStore.region
   )
+})
+
+const hiddenBuildingsCount = computed(() => {
+  const all = catalogStore.buildingsForUi ?? []
+  const unlocked = researchStore.unlockedCodes
+  return all.filter(b => b.requiredResearch && !unlocked.has(b.requiredResearch)).length
 })
 
 const selectedItem = computed<FactoryItem | null>(() =>
@@ -944,6 +976,20 @@ const startMove = () => {
   moveId.value = warehouseObj.value.id
   closeWarehouse()
 }
+// перенос завода: «Переместить» в окне производства (идущее производство сохраняется)
+const startMoveFactory = () => {
+  const o = activeFactory.value
+  if (!o) return
+  buildMode.value = false
+  moveId.value = o.id
+  closeFactory()
+}
+// название переносимого объекта для плашки
+const moveTitle = computed(() => {
+  const m = moveObj.value
+  if (!m) return ''
+  return catalogStore.byCode(m.building ?? '')?.title ?? m.building ?? ''
+})
 const cancelMove = () => { moveId.value = null }
 
 // превью на поле: при переносе — склад, иначе выбранная культура/здание (только в режиме строительства)
@@ -1075,7 +1121,7 @@ const onCellClick = async (cell: Cell) => {
 const onObjectClick = async (obj: PlacedObject) => {
   const userId = authStore.user?.id
   if (!userId) return
-  if (moveId.value != null) return // идёт перенос склада: клики по объектам не нужны
+  if (moveId.value != null) return // идёт перенос: клики по объектам не нужны
 
   // лаборатория → дерево исследований
   if (obj.kind === 'BUILDING' && obj.building === 'laboratory') {

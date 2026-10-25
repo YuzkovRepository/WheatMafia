@@ -13,6 +13,15 @@ export default defineNuxtPlugin(() => {
         }
         options.headers = headers
       }
+    },
+    onResponseError({ request, response }) {
+      const url = String(request)
+      const isAuthCall = url.includes('/users/login') || url.includes('/users/register')
+      // токен есть, но сервер его не принял — сессия истекла
+      if (!isAuthCall && authStore.token && (response.status === 401 || response.status === 403)) {
+        authStore.logout()
+        navigateTo('/login') // подставьте свой путь к странице входа
+      }
     }
   })
 })
