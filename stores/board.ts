@@ -20,6 +20,16 @@ export interface PlacedObject {
   building?: string
   level?: number
   builtAt?: string
+
+  // производство (для BUILDING); null-поля сервер не присылает
+  productionStartedAt?: string
+  productionReadyAt?: string
+  productionInput?: string
+  productionInputQty?: number
+  productionOutput?: string
+  productionOutputQty?: number
+  productionTime?: number
+  recipeCode?: string
 }
 
 export interface Board {
@@ -122,6 +132,62 @@ export const useBoardStore = defineStore('board', {
         return { success: true }
       } catch (e: any) {
         this.error = errMsg(e, 'Не удалось собрать')
+        return { success: false }
+      }
+    },
+
+    /** Перенос объекта (склада) на новое место: row/col — левый верхний угол. */
+    async moveObject(
+      sessionCode: string,
+      userId: number,
+      objectId: number,
+      row: number,
+      col: number
+    ) {
+      this.error = null
+      try {
+        await $fetch(
+          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/move/${objectId}`,
+          { method: 'POST', body: { row, col }, headers: authHeaders() }
+        )
+        return { success: true }
+      } catch (e: any) {
+        this.error = errMsg(e, 'Не удалось переместить')
+        return { success: false }
+      }
+    },
+
+    /** Запуск производства на заводе по рецепту (outputCode). */
+    async startProduction(
+      sessionCode: string,
+      userId: number,
+      objectId: number,
+      outputCode: string
+    ) {
+      this.error = null
+      try {
+        await $fetch(
+          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/start`,
+          { method: 'POST', body: { outputCode }, headers: authHeaders() }
+        )
+        return { success: true }
+      } catch (e: any) {
+        this.error = errMsg(e, 'Не удалось запустить производство')
+        return { success: false }
+      }
+    },
+
+    /** Забрать готовую продукцию в склад. */
+    async collectProduction(sessionCode: string, userId: number, objectId: number) {
+      this.error = null
+      try {
+        await $fetch(
+          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/collect`,
+          { method: 'POST', headers: authHeaders() }
+        )
+        return { success: true }
+      } catch (e: any) {
+        this.error = errMsg(e, 'Не удалось забрать продукцию')
         return { success: false }
       }
     }
