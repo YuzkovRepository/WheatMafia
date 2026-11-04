@@ -55,7 +55,7 @@ export const useAuthStore = defineStore('auth', {
 
       try {
         const response = await $fetch<{ status: number; message: string; data: LoginResponse }>(
-          '${apiBase}/api/v1/users/login',
+          '${apiBase}/v1/users/login',
           {
             method: 'POST',
             body: {
