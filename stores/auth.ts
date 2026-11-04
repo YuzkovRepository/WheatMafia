@@ -1,6 +1,4 @@
 import { defineStore } from 'pinia'
-const config = useRuntimeConfig()
-const apiBase = config.public.apiBase
 
 interface User {
   id?: number
