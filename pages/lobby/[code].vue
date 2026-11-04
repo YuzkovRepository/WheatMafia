@@ -129,6 +129,7 @@ definePageMeta({ layout: false })
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const config = useRuntimeConfig()
 const sessionStore = useSessionStore()
 
 const code = computed(() => String(route.params.code || '').toUpperCase())
@@ -157,21 +158,29 @@ let client: Client | null = null
 
 onMounted(() => {
   const userId = authStore.user?.id
-  if (!userId) return
 
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  if (!userId) {
+    return
+  }
+
   client = new Client({
-    brokerURL: `${proto}://${location.host}/ws`,
+    brokerURL: config.public.wsBase,
     reconnectDelay: 3000,
+
     onConnect: async () => {
-      // сначала подписка, потом вход в комнату — чтобы не пропустить события
-      client!.subscribe(`/topic/lobby.${code.value}`, (msg) => {
-        sessionStore.applyLobbyState(JSON.parse(msg.body))
-      })
-      // вход + актуальное состояние (срабатывает и после переподключения)
+      client?.subscribe(
+        `/topic/lobby.${code.value}`,
+        message => {
+          sessionStore.applyLobbyState(
+            JSON.parse(message.body)
+          )
+        }
+      )
+
       await sessionStore.joinSession(userId, code.value)
     }
   })
+
   client.activate()
 })
 
