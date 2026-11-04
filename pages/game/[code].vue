@@ -927,6 +927,7 @@ import { productEmoji, fmtDuration, toMs } from '~/utils/productLook'
 import { deputyImgSrc, regionFlag, regionName } from '~/utils/deputyLook'
 
 const route = useRoute()
+const config = useRuntimeConfig()
 const authStore = useAuthStore()
 const councilStore = useCouncilStore()
 const notesStore = useNotesStore()
