@@ -70,6 +70,9 @@ const PRODUCT_EMOJI: Record<string, string> = {
 export const productEmoji = (code?: string | null): string =>
   (code && PRODUCT_EMOJI[code]) || '📦'
 
+export const productImgSrc = (code?: string | null): string =>
+  code ? `/object/${code}.png` : ''
+
 // 45 -> "45 с", 90 -> "1 мин 30 с", 120 -> "2 мин"
 export const fmtDuration = (sec: number): string => {
   const s = Math.max(0, Math.round(sec))

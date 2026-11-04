@@ -164,8 +164,10 @@
           :preview-code="boardPreview.code"
           :ignore-id="moveId"
           :active="boardActive"
+          :buyer="buyerView"
           @cell-click="onCellClick"
           @object-click="onObjectClick"
+          @buyer-click="openBlack"
         />
 
         <!-- режим переноса (склад или завод) -->
@@ -177,6 +179,30 @@
           <button @click="cancelMove" class="px-2 py-0.5 rounded-lg bg-stone-900/15 hover:bg-stone-900/25 text-sm font-semibold">
             Отмена
           </button>
+        </div>
+
+        <!-- совет семей: голосование за случайное событие каждые 5 минут -->
+        <div
+          v-if="authStore.user?.id"
+          class="absolute left-1/2 -translate-x-1/2 z-20 pointer-events-none"
+          :class="moveObj ? 'top-16' : 'top-3'"
+        >
+          <CouncilPanel :code="code" :user-id="authStore.user.id" />
+        </div>
+
+        <!-- левый верхний угол: личные заметки (только в браузере, без бэкенда) -->
+        <div
+          class="absolute left-3 z-10 flex flex-col items-start gap-2"
+          :class="placing ? 'top-16' : 'top-3'"
+        >
+          <FarmNotes :storage-key="`${code}:${authStore.user?.id ?? 0}`" />
+          <!-- личные сообщения между игроками -->
+          <ChatPanel
+            v-if="authStore.user?.id"
+            :code="code"
+            :user-id="authStore.user.id"
+            @visible="chatVisible = $event"
+          />
         </div>
 
         <!-- левый верхний угол: что выбрано (только в режиме строительства) -->
@@ -215,6 +241,50 @@
           </div>
         </div>
 
+        <!-- правый верхний угол: гонка депутатов (кто сколько сдал) -->
+        <div
+          v-if="deputyStore.current"
+          class="hidden sm:block absolute top-3 right-3 z-10 w-60 px-3 py-2 rounded-xl bg-stone-900/70 backdrop-blur text-amber-50 border border-white/10 shadow-lg cursor-pointer"
+          @click="openDeputy"
+        >
+          <div class="text-[11px] font-semibold uppercase tracking-wide text-amber-200/70 mb-1.5">
+            🏛️ Гонка депутатов
+          </div>
+          <div v-for="p in deputyStore.leaderboard" :key="p.userId" class="mb-1.5 last:mb-0">
+            <div class="flex items-center justify-between gap-2 text-xs">
+              <span class="truncate">
+                {{ regionFlag(p.region) }} {{ p.nickName }}<span v-if="p.userId === authStore.user?.id" class="text-amber-300"> (вы)</span>
+              </span>
+              <b>{{ p.delivered }}/{{ p.total }}</b>
+            </div>
+            <div class="h-1.5 rounded-full bg-white/15 overflow-hidden">
+              <div
+                class="h-full bg-gradient-to-r from-lime-400 to-lime-500 transition-all"
+                :style="{ width: (p.total ? (p.delivered / p.total) * 100 : 0) + '%' }"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- депутат: слева от фермы -->
+        <button
+          @click="openDeputy"
+          aria-label="Депутат"
+          class="absolute left-2 sm:left-6 top-1/2 -translate-y-1/2 z-10 group flex flex-col items-center"
+        >
+          <img
+            v-if="deputySrc && !broken.has(deputySrc)"
+            :src="deputySrc"
+            class="w-24 sm:w-36 object-contain drop-shadow-xl group-hover:scale-105 transition"
+            alt=""
+            @error="broken.add(deputySrc)"
+          />
+          <span v-else class="text-6xl">🏛️</span>
+          <span class="mt-1 px-3 py-1 rounded-full bg-stone-900/75 text-amber-100 text-xs font-semibold border border-white/10">
+            Депутат<template v-if="myDeputy"> · {{ myDeputy.delivered }}/{{ myDeputy.total }}</template>
+          </span>
+        </button>
+
         <!-- скупщик: сбоку от фермы -->
         <button
           @click="openTrader"
@@ -237,7 +307,7 @@
         <!-- левый нижний угол: подсказка -->
         <div class="hidden sm:block absolute bottom-3 left-3 z-10 px-3 py-1.5 rounded-xl bg-stone-900/60 backdrop-blur text-[11px] text-amber-100/80 border border-white/10">
           <template v-if="placing">Клик по лугу — поставить · Esc / правый клик / «Отмена» — выйти из режима</template>
-          <template v-else>Клик по золотой грядке — собрать · клик по заводу — производство · клик по складу — содержимое · 🧪 — исследования · 🧑‍💼 — продать скупщику · 🏪 — маркетплейс · 🤝 — контракты · 🛠️ — строительство</template>
+          <template v-else>Клик по золотой грядке — собрать (она вырастет заново) · клик по растущей культуре — переместить или убрать · клик по заводу — производство · клик по складу — содержимое · 🏛️ — накормить депутата · 🧪 — исследования · 🧑‍💼 — продать скупщику · 🛵 — теневой скупщик (нелегал) · 🏪 — маркетплейс · 🤝 — контракты · 🛠️ — строительство</template>
         </div>
 
         <!-- правый нижний угол: отмена строительства (сверху), исследования, маркетплейс, справочник, склад и инструменты -->
@@ -251,6 +321,22 @@
           </button>
 
           <div class="flex items-center gap-2">
+            <!-- визит на чужую ферму -->
+            <button
+              @click="onVisit"
+              :disabled="visitDisabled"
+              aria-label="Наведаться на чужую ферму"
+              :title="visitTitle"
+              class="relative w-14 h-14 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-3xl shadow-xl border border-amber-300/60 transition flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              🕵️
+              <span
+                v-if="visitsStore.current"
+                class="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-stone-900 text-amber-300 text-[11px] font-bold flex items-center justify-center border border-amber-300/60"
+              >
+                {{ visitsStore.current.active ? '●' : visitsStore.current.remaining }}
+              </span>
+            </button>
             <!-- исследования -->
             <button
               @click="openResearch"
@@ -296,8 +382,23 @@
                 {{ marketStore.lots.length }}
               </span>
             </button>
+            <!-- теневой скупщик: нелегальный товар -->
             <button
-              @click="catalogOpen = true"
+              @click="openBlack"
+              aria-label="Теневой скупщик"
+              title="Теневой скупщик — нелегальный товар"
+              class="relative w-14 h-14 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-3xl shadow-xl border border-amber-300/60 transition flex items-center justify-center"
+            >
+              🛵
+              <span
+                v-if="blackBadge"
+                class="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-stone-900 text-amber-300 text-[11px] font-bold flex items-center justify-center border border-amber-300/60"
+              >
+                {{ blackBadge }}
+              </span>
+            </button>
+            <button
+              @click="openCatalog(null)"
               aria-label="Справочник"
               title="Справочник"
               class="w-14 h-14 rounded-2xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-3xl shadow-xl border border-amber-300/60 transition flex items-center justify-center"
@@ -322,6 +423,53 @@
               🛠️
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Всплывающее уведомление: кто что сдал депутату / замечен скупщик -->
+    <div
+      v-if="toastText"
+      class="fixed top-4 left-1/2 -translate-x-1/2 z-[70] max-w-[90vw] px-4 py-2 rounded-xl bg-stone-900/90 text-amber-50 text-sm font-semibold shadow-2xl border border-amber-400/40"
+    >
+      {{ toastText }}
+    </div>
+
+    <!-- «добавлено в заметки» (двойной клик в справочнике / исследованиях) -->
+    <div
+      v-if="notesStore.flash"
+      class="fixed top-16 left-1/2 -translate-x-1/2 z-[80] max-w-[90vw] px-4 py-2 rounded-xl bg-stone-900/90 text-amber-50 text-sm font-semibold shadow-2xl border border-amber-400/40"
+    >
+      {{ notesStore.flash }}
+    </div>
+
+    <!-- Победитель: видят все игроки -->
+    <div
+      v-if="deputyStore.winner && !winnerDismissed"
+      class="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4"
+    >
+      <div class="bg-stone-50 rounded-2xl shadow-2xl w-full max-w-md p-6 text-center">
+        <div class="text-6xl">🏆</div>
+        <h2 class="mt-2 text-2xl font-serif font-bold text-stone-800">Игра окончена!</h2>
+        <p class="mt-3 text-stone-700">
+          <b>{{ deputyStore.winner.nickName }}</b>
+          <span class="text-stone-500"> ({{ regionName(deputyStore.winner.region) }})</span>
+          первым накормил депутата всеми блюдами и золотым экспортом.
+        </p>
+        <p v-if="iAmWinner" class="mt-2 text-lime-700 font-semibold">Это вы — поздравляем! 🎉</p>
+        <div class="mt-5 flex justify-center gap-2">
+          <button
+            @click="winnerDismissed = true; openDeputy()"
+            class="px-4 py-2 rounded-xl font-semibold text-sm bg-amber-500 hover:bg-amber-400 text-stone-900"
+          >
+            Таблица результатов
+          </button>
+          <button
+            @click="winnerDismissed = true"
+            class="px-4 py-2 rounded-xl font-semibold text-sm bg-stone-200 hover:bg-stone-300 text-stone-700"
+          >
+            Закрыть
+          </button>
         </div>
       </div>
     </div>
@@ -501,6 +649,61 @@
       </div>
     </div>
 
+    <!-- Модалка культуры: переместить или убрать с поля -->
+    <div
+      v-if="activeCrop"
+      class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      @click.self="closeCrop"
+    >
+      <div class="bg-stone-50 rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-stone-200">
+          <div class="flex items-center gap-3">
+            <ProductIcon :code="activeCrop.crop" :size="44" />
+            <div>
+              <h2 class="text-xl font-semibold text-stone-800">{{ cropTitle }}</h2>
+              <p class="text-xs text-stone-500">{{ activeCrop.width }}×{{ activeCrop.height }}</p>
+            </div>
+          </div>
+          <button @click="closeCrop" class="text-stone-500 hover:text-stone-800 text-2xl leading-none">×</button>
+        </div>
+
+        <div class="p-5 space-y-4">
+          <p v-if="boardStore.error" class="bg-red-100 border border-red-300 text-red-700 text-sm rounded-xl p-2">
+            {{ boardStore.error }}
+          </p>
+
+          <div>
+            <div class="text-xs text-stone-600">
+              <template v-if="cropLeft > 0">Растёт — осталось {{ fmtDuration(cropLeft) }}</template>
+              <template v-else>Созрела — закройте окно и кликните по грядке, чтобы собрать</template>
+            </div>
+            <div class="mt-2 h-2 rounded-full bg-stone-200 overflow-hidden">
+              <div
+                class="h-full bg-gradient-to-b from-lime-400 to-lime-600 transition-all duration-1000 ease-linear"
+                :style="{ width: cropPct * 100 + '%' }"
+              />
+            </div>
+          </div>
+
+          <div class="flex gap-2">
+            <button
+              @click="startMoveCrop"
+              class="flex-1 px-3 py-2 rounded-xl font-semibold text-sm bg-amber-500 hover:bg-amber-400 text-stone-900"
+            >
+              Переместить
+            </button>
+            <button
+              :disabled="busy"
+              @click="onRemoveCrop"
+              class="flex-1 px-3 py-2 rounded-xl font-semibold text-sm bg-stone-200 hover:bg-red-100 hover:text-red-700 text-stone-700 disabled:opacity-50"
+            >
+              Убрать с поля
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Модалка завода: рецепты и производство -->
     <div
       v-if="activeFactory"
@@ -538,34 +741,70 @@
             {{ boardStore.error }}
           </p>
 
-          <!-- идёт производство -->
-          <div v-if="factoryRunning" class="rounded-xl border-2 border-amber-400 bg-amber-50 p-3">
-            <div class="flex items-center gap-3">
-              <div class="text-4xl">{{ productEmoji(activeFactory.productionOutput) }}</div>
-              <div class="flex-1 min-w-0">
-                <div class="font-semibold text-stone-800">
-                  {{ productOf(activeFactory.productionOutput)?.title ?? activeFactory.productionOutput }}
-                  <span v-if="(activeFactory.productionOutputQty ?? 1) > 1">×{{ activeFactory.productionOutputQty }}</span>
+          <p
+            v-if="factoryBlockedLeft > 0"
+            class="rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm font-semibold p-2.5"
+          >
+            ✊ Забастовка: здание не работает ещё {{ fmtDuration(factoryBlockedLeft) }}. Новое производство начать нельзя.
+          </p>
+
+          <!-- ячейки производства: продукты делаются по очереди, готовый можно забрать сразу -->
+          <div class="rounded-xl border-2 border-stone-200 bg-white p-3">
+            <div class="flex items-center justify-between text-xs font-semibold text-stone-500">
+              <span>Производство</span>
+              <span>{{ factorySlots.filter(x => x.job).length }}/{{ MAX_QUEUE }}</span>
+            </div>
+            <div class="mt-2 space-y-2">
+              <template v-for="(sl, i) in factorySlots" :key="i">
+                <div
+                  v-if="sl.job"
+                  class="rounded-xl border-2 p-2.5"
+                  :class="sl.done ? 'border-amber-400 bg-amber-50' : 'border-stone-200 bg-stone-50'"
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="text-3xl">{{ sl.emoji }}</span>
+                    <div class="flex-1 min-w-0">
+                      <div class="font-semibold text-sm text-stone-800 truncate">
+                        {{ sl.title }} <span v-if="sl.qty > 1" class="text-stone-400">×{{ sl.qty }}</span>
+                      </div>
+                      <div class="text-xs text-stone-600">
+                        <template v-if="sl.done">Готово — можно забирать</template>
+                        <template v-else-if="sl.waiting">В очереди · начнётся через {{ fmtDuration(sl.startsIn) }}</template>
+                        <template v-else>Осталось: {{ fmtDuration(sl.left) }}</template>
+                      </div>
+                    </div>
+                    <button
+                      v-if="sl.done"
+                      :disabled="busy"
+                      @click="onCollect(i)"
+                      class="px-3 py-1.5 rounded-xl font-semibold text-sm bg-amber-500 hover:bg-amber-400 text-stone-900 disabled:opacity-50"
+                    >
+                      Забрать
+                    </button>
+                    <button
+                      v-else-if="sl.waiting"
+                      :disabled="busy"
+                      @click="onCancelQueued(i)"
+                      title="Убрать из очереди (ингредиенты вернутся на склад)"
+                      class="w-7 h-7 rounded-lg bg-stone-200 hover:bg-red-100 text-stone-600 leading-none disabled:opacity-50"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div v-if="!sl.done && !sl.waiting" class="mt-2 h-2 rounded-full bg-stone-200 overflow-hidden">
+                    <div
+                      class="h-full bg-gradient-to-b from-lime-400 to-lime-600 transition-all duration-1000 ease-linear"
+                      :style="{ width: sl.pct * 100 + '%' }"
+                    />
+                  </div>
                 </div>
-                <div class="text-xs text-stone-600">
-                  <template v-if="factoryDone">Готово — можно забирать</template>
-                  <template v-else>Осталось: {{ fmtDuration(factoryLeft) }}</template>
+                <div
+                  v-else
+                  class="rounded-xl border-2 border-dashed border-stone-200 px-3 py-3 text-xs text-stone-400 text-center"
+                >
+                  Свободная ячейка
                 </div>
-                <div class="mt-2 h-2 rounded-full bg-stone-200 overflow-hidden">
-                  <div
-                    class="h-full bg-gradient-to-b from-lime-400 to-lime-600 transition-all duration-1000 ease-linear"
-                    :style="{ width: factoryPct * 100 + '%' }"
-                  />
-                </div>
-              </div>
-              <button
-                v-if="factoryDone"
-                :disabled="busy"
-                @click="onCollect"
-                class="px-4 py-2 rounded-xl font-semibold text-sm bg-amber-500 hover:bg-amber-400 text-stone-900 disabled:opacity-50"
-              >
-                Забрать
-              </button>
+              </template>
             </div>
           </div>
 
@@ -574,7 +813,7 @@
             v-for="r in activeRecipes"
             :key="r.code"
             class="rounded-xl border-2 border-stone-200 bg-white p-3 flex items-center gap-3"
-            :class="{ 'opacity-60': factoryRunning || !r.canMake }"
+            :class="{ 'opacity-60': !r.canMake }"
           >
             <div class="text-4xl">{{ r.emoji }}</div>
             <div class="flex-1 min-w-0">
@@ -605,12 +844,12 @@
               </div>
             </div>
             <button
-              :disabled="factoryRunning || busy || !r.canMake"
-              :title="!r.canMake ? 'Не хватает ингредиентов на складе' : ''"
+              :disabled="queueFull || busy || !r.canMake || factoryBlockedLeft > 0"
+              :title="!r.canMake ? 'Не хватает ингредиентов на складе' : queueFull ? 'Все ячейки заняты' : ''"
               @click="onProduce(r.code)"
               class="px-3 py-2 rounded-xl font-semibold text-sm bg-amber-500 hover:bg-amber-400 text-stone-900 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Производить
+              {{ factoryJobs.length ? 'В очередь' : 'Производить' }}
             </button>
           </div>
 
@@ -621,37 +860,158 @@
       </div>
     </div>
 
-    <!-- Скупщик (NPC), маркетплейс (игроки), контракты, справочник, исследования -->
+    <!-- Скупщик (NPC), маркетплейс (игроки), контракты, справочник, исследования, депутат, теневой скупщик -->
     <TraderModal v-if="traderOpen" :code="code" @close="traderOpen = false" />
     <MarketModal v-if="marketOpen" :code="code" @close="marketOpen = false" />
     <DealsModal v-if="dealsOpen" :code="code" @close="dealsOpen = false" />
-    <CatalogModal v-if="catalogOpen" @close="catalogOpen = false" />
-    <ResearchModal v-if="researchOpen" :code="code" @close="researchOpen = false" />
+    <ResearchModal
+      v-if="researchOpen"
+      :code="code"
+      :highlight="researchHighlight"
+      :highlight-stage="researchHighlightStage"
+      @close="closeResearch"
+      @open-catalog="openCatalog"
+    />
+
+    <VisitPickModal
+      v-if="visitPickOpen && visitsStore.current"
+      :candidates="visitsStore.current.candidates"
+      :remaining="visitsStore.current.remaining"
+      :max="visitsStore.current.max"
+      :disabled="visitBusy || visitsStore.current.remaining <= 0 || visitCooldownSec > 0"
+      :hint="visitHint"
+      @close="visitPickOpen = false"
+      @pick="onVisitPick"
+    />
+
+    <VisitFarmModal
+      v-if="visitOpen && authStore.user?.id"
+      :code="code"
+      :user-id="authStore.user.id"
+      @close="visitOpen = false"
+    />
+
+    <!-- справочник идёт после исследований, чтобы открываться поверх них -->
+    <CatalogModal v-if="catalogOpen" :focus="catalogFocus" @close="closeCatalog" />
+
+    <DeputyModal
+      v-if="deputyOpen"
+      :code="code"
+      @close="deputyOpen = false"
+      @open-research="onOpenResearchFromDeputy"
+    />
+
+    <BlackMarketModal v-if="blackOpen" :code="code" @close="blackOpen = false" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { Client } from '@stomp/stompjs'
-import { useBoardStore } from '~/stores/board'
+import { useBoardStore, jobsOf } from '~/stores/board'
+import { useCouncilStore } from '~/stores/council'
+import { useNotesStore } from '~/stores/notes'
+import { useChatStore } from '~/stores/chat'
+import { useVisitsStore, type VisitEvent } from '~/stores/visits'
 import { useAuthStore } from '~/stores/auth'
 import { useCatalogStore, type FactoryItem } from '~/stores/catalog'
-import type { PlacedObject, Cell, Board } from '~/stores/board'
+import type { PlacedObject, Cell, Board, QueuedJob } from '~/stores/board'
 import { objectSrc } from '~/utils/objectSrc'
 import { cropKind } from '~/utils/cropLook'
 import { useStorageStore } from '~/stores/storage'
 import { useMarketStore } from '~/stores/market'
 import { useDealsStore } from '~/stores/deals'
 import { useResearchStore } from '~/stores/research'
+import { useDeputyStore, type DeputyEvent } from '~/stores/deputy'
+import { useBlackMarketStore, type BmEvent } from '~/stores/blackMarket'
 import { productEmoji, fmtDuration, toMs } from '~/utils/productLook'
+import { deputyImgSrc, regionFlag, regionName } from '~/utils/deputyLook'
 
 const route = useRoute()
 const authStore = useAuthStore()
+const councilStore = useCouncilStore()
+const notesStore = useNotesStore()
+const visitsStore = useVisitsStore()
+const chatStore = useChatStore()
+const chatVisible = ref(false)
+
+/* ---------- визиты на чужие фермы ---------- */
+const visitOpen = ref(false)
+const visitPickOpen = ref(false)
+const visitBusy = ref(false)
+const visitCooldownSec = computed(() => {
+  const s = visitsStore.current
+  if (!s) return 0
+  return Math.max(0, Math.ceil((s.cooldownUntilMs - (now.value + visitsStore.offsetMs)) / 1000))
+})
+const visitTitle = computed(() => {
+  const s = visitsStore.current
+  if (!s) return 'Наведаться на чужую ферму'
+  if (s.active) return 'Вернуться к визиту'
+  if (s.remaining <= 0) return 'Визиты закончились'
+  if (visitCooldownSec.value > 0) return `Следующий визит через ${visitCooldownSec.value} с`
+  return `Наведаться на чужую ферму (осталось ${s.remaining} из ${s.max})`
+})
+const visitDisabled = computed(() => {
+  const s = visitsStore.current
+  if (!s || visitBusy.value) return true
+  if (s.active) return false
+  return s.remaining <= 0 || visitCooldownSec.value > 0
+})
+const visitHint = computed(() => {
+  const s = visitsStore.current
+  if (!s) return ''
+  if (visitCooldownSec.value > 0) return `Следующий визит через ${visitCooldownSec.value} с`
+  return visitsStore.error ?? ''
+})
+
+/** Кнопка 🕵️: идёт визит — вернуться к нему, иначе выбрать, чью ферму навестить. */
+const onVisit = async () => {
+  const userId = authStore.user?.id
+  const s = visitsStore.current
+  if (!userId || !s || visitBusy.value) return
+  buildMode.value = false
+  visitsStore.error = null
+  if (s.active) {
+    visitOpen.value = true
+    return
+  }
+  await visitsStore.load(code.value, userId) // свежий список игроков
+  visitPickOpen.value = true
+}
+
+const onVisitPick = async (targetId: number) => {
+  const userId = authStore.user?.id
+  if (!userId || visitBusy.value) return
+  visitBusy.value = true
+  try {
+    const ok = await visitsStore.start(code.value, userId, targetId)
+    if (!ok) return // причина показана в окне выбора
+    visitPickOpen.value = false
+    visitOpen.value = true
+  } finally {
+    visitBusy.value = false
+  }
+}
+const onVisitEvent = (ev: VisitEvent) => {
+  const me = authStore.user?.id
+  if (ev.type !== 'CAUGHT') return
+  if (ev.targetUserId === me) {
+    showToast(`🚨 ${ev.visitorNick} заметил вашего скупщика! Штраф ${ev.fine} 🪙` +
+      (ev.confiscatedUnits ? `, конфисковано ${ev.confiscatedUnits} ед. нелегала` : ''))
+    if (me) { blackStore.load(code.value, me); loadStorage() }
+  } else if (ev.visitorId !== me) {
+    showToast(`🕵️ ${ev.visitorNick} разоблачил скупщика у ${ev.targetNick}`)
+  }
+  if (me) marketStore.load(code.value, me)
+}
 const boardStore = useBoardStore()
 const catalogStore = useCatalogStore()
 const storageStore = useStorageStore()
 const marketStore = useMarketStore()
 const dealsStore = useDealsStore()
 const researchStore = useResearchStore()
+const deputyStore = useDeputyStore()
+const blackStore = useBlackMarketStore()
 
 const code = computed(() => String(route.params.code || '').toUpperCase())
 
@@ -840,25 +1200,35 @@ const activeFactoryItem = computed<FactoryItem | null>(() =>
 )
 const activeRecipes = computed(() => recipeRows(activeFactory.value?.building))
 
-const factoryRunning = computed(() => {
+/* ячейки производства: до MAX_QUEUE продуктов (лимит проверяет и сервер) */
+const MAX_QUEUE = 3
+const factoryJobs = computed(() => (activeFactory.value ? jobsOf(activeFactory.value) : []))
+const queueFull = computed(() => factoryJobs.value.length >= MAX_QUEUE)
+const factoryBlockedLeft = computed(() => {
   const o = activeFactory.value
-  return !!o && !!o.productionStartedAt && !!o.productionReadyAt
+  return o?.blockedUntil ? Math.max(0, Math.ceil((toMs(o.blockedUntil) - now.value) / 1000)) : 0
 })
-const factoryDone = computed(() => {
-  const o = activeFactory.value
-  return factoryRunning.value && !!o && now.value >= toMs(o.productionReadyAt)
-})
-const factoryLeft = computed(() => {
-  const o = activeFactory.value
-  if (!o || !factoryRunning.value) return 0
-  return Math.max(0, Math.ceil((toMs(o.productionReadyAt) - now.value) / 1000))
-})
-const factoryPct = computed(() => {
-  const o = activeFactory.value
-  if (!o || !factoryRunning.value) return 0
-  const start = toMs(o.productionStartedAt), end = toMs(o.productionReadyAt)
-  if (!end || end <= start) return factoryDone.value ? 1 : 0
-  return Math.min(Math.max((now.value - start) / (end - start), 0), 1)
+const factorySlots = computed(() => {
+  const jobs = factoryJobs.value
+  return Array.from({ length: MAX_QUEUE }, (_, i) => {
+    const job = jobs[i]
+    if (!job) return { job: null as QueuedJob | null, emoji: '', title: '', qty: 1, done: false, waiting: false, left: 0, startsIn: 0, pct: 0 }
+    const start = toMs(job.startedAt), end = toMs(job.readyAt)
+    const done = now.value >= end
+    const waiting = !done && now.value < start
+    const pct = !end || end <= start ? (done ? 1 : 0) : Math.min(Math.max((now.value - start) / (end - start), 0), 1)
+    return {
+      job,
+      emoji: productEmoji(job.output),
+      title: productOf(job.output)?.title ?? job.output,
+      qty: job.outputQty ?? 1,
+      done,
+      waiting,
+      left: Math.max(0, Math.ceil((end - now.value) / 1000)),
+      startsIn: Math.max(0, Math.ceil((start - now.value) / 1000)),
+      pct
+    }
+  })
 })
 
 const closeFactory = () => { factoryObjId.value = null }
@@ -875,13 +1245,25 @@ const onProduce = async (outputCode: string) => {
   }
 }
 
-const onCollect = async () => {
+const onCancelQueued = async (index: number) => {
   const userId = authStore.user?.id
   const obj = activeFactory.value
   if (!userId || !obj || busy.value) return
   busy.value = true
   try {
-    await boardStore.collectProduction(code.value, userId, obj.id)
+    await boardStore.cancelQueued(code.value, userId, obj.id, index)
+  } finally {
+    busy.value = false
+  }
+}
+
+const onCollect = async (index: number) => {
+  const userId = authStore.user?.id
+  const obj = activeFactory.value
+  if (!userId || !obj || busy.value) return
+  busy.value = true
+  try {
+    await boardStore.collectProduction(code.value, userId, obj.id, index)
   } finally {
     busy.value = false
   }
@@ -916,7 +1298,26 @@ const traderOpen = ref(false)
 const marketOpen = ref(false)
 const dealsOpen = ref(false)
 const catalogOpen = ref(false)
+const catalogFocus = ref<string | null>(null)
+const openCatalog = (focus: string | null = null) => {
+  catalogFocus.value = focus
+  catalogOpen.value = true
+}
+const closeCatalog = () => {
+  catalogOpen.value = false
+  catalogFocus.value = null
+}
 const researchOpen = ref(false)
+
+/* подсветка нужного исследования после перехода из депутата */
+const researchHighlight = ref<string | null>(null)
+const researchHighlightStage = ref<number | null>(null)
+
+const closeResearch = () => {
+  researchOpen.value = false
+  researchHighlight.value = null
+  researchHighlightStage.value = null
+}
 
 const openTrader = () => {
   buildMode.value = false
@@ -932,12 +1333,106 @@ const openDeals = () => {
 }
 const openResearch = () => {
   buildMode.value = false
+  // обычное открытие — без подсветки
+  researchHighlight.value = null
+  researchHighlightStage.value = null
   researchOpen.value = true
   const userId = authStore.user?.id
   if (userId) researchStore.load(code.value, userId)
 }
 // картинка скупщика (иконка берётся из каталога: code = trader)
 const traderSrc = computed(() => objectSrc(catalogStore.byCode('trader')?.icon) || '')
+
+/* ---------- теневой скупщик (нелегальный товар) ---------- */
+const blackOpen = ref(false)
+
+const openBlack = () => {
+  buildMode.value = false
+  blackOpen.value = true
+}
+
+// бейдж на кнопке 🛵: 💰 — скупщик на вашей ферме, 🛵 — едет, число — чужие активные скупщики
+const blackBadge = computed(() => {
+  const t = now.value + blackStore.offsetMs
+  const mine = blackStore.current?.mine
+  if (mine && t < mine.leavesAtMs) return t < mine.arrivesAtMs ? '🛵' : '💰'
+  const others = blackStore.active.filter(a => a.userId !== authStore.user?.id && t < a.leavesAtMs)
+  return others.length ? String(others.length) : ''
+})
+
+// визит скупщика для сцены фермы: дорогу и самого скупщика рисует FarmBoard, он сам следит за фазами по времени
+const buyerView = computed(() => {
+  const v = blackStore.current?.mine
+  if (!v) return null
+  return {
+    summonedAtMs: v.summonedAtMs,
+    arrivesAtMs: v.arrivesAtMs,
+    leavesAtMs: v.leavesAtMs,
+    offsetMs: blackStore.offsetMs
+  }
+})
+
+// событие из STOMP: кто-то вызвал или отпустил скупщика
+const onBlackEvent = (ev: BmEvent) => {
+  blackStore.applyEvent(ev)
+  if (ev.userId === authStore.user?.id) return
+  if (ev.type === 'SUMMONED') {
+    showToast(`🕵️ Замечен нелегальный скупщик у игрока ${ev.nickName}`)
+  }
+}
+
+/* ---------- депутат: цель игры ---------- */
+const deputyOpen = ref(false)
+const winnerDismissed = ref(false)
+const toastText = ref('')
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+onBeforeUnmount(() => { if (toastTimer) clearTimeout(toastTimer) })
+
+const myDeputy = computed(() =>
+  deputyStore.current?.players.find(p => p.userId === authStore.user?.id) ?? null
+)
+// картинка депутата своей страны из public/object
+const deputySrc = computed(() => deputyImgSrc(myDeputy.value?.region ?? researchStore.region))
+const iAmWinner = computed(() => deputyStore.winner?.userId === authStore.user?.id)
+
+const openDeputy = () => {
+  buildMode.value = false
+  deputyOpen.value = true
+}
+
+/**
+ * Переход из карточки заказа депутата в дерево исследований:
+ * закрываем депутата, открываем исследования на нужном этапе с подсветкой конкретного узла.
+ */
+const onOpenResearchFromDeputy = (payload: { code: string | null; stage: number }) => {
+  deputyOpen.value = false
+  researchHighlight.value = payload.code
+  researchHighlightStage.value = payload.stage
+  researchOpen.value = true
+  const userId = authStore.user?.id
+  if (userId) researchStore.load(code.value, userId)
+}
+
+const showToast = (text: string) => {
+  toastText.value = text
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (toastText.value = ''), 5000)
+}
+
+// событие из STOMP: кто-то накормил депутата или выиграл
+const onDeputyEvent = (ev: DeputyEvent) => {
+  deputyStore.applyEvent(ev)
+  if (ev.type === 'WON') {
+    winnerDismissed.value = false
+    showToast(`🏆 ${ev.nickName} победил(а)!`)
+    return
+  }
+  const p = ev.state?.players.find(x => x.userId === ev.userId)
+  showToast(
+    `🏛️ ${ev.nickName} накормил(а) депутата: ${ev.productTitle}` +
+    (p ? ` (${p.delivered}/${p.total})` : '')
+  )
+}
 
 // подпись региона в шапке
 const regionLabel = computed(() => {
@@ -988,13 +1483,63 @@ const startMoveFactory = () => {
 const moveTitle = computed(() => {
   const m = moveObj.value
   if (!m) return ''
-  return catalogStore.byCode(m.building ?? '')?.title ?? m.building ?? ''
+  const c = m.kind === 'CROP' ? m.crop : m.building
+  return catalogStore.byCode(c ?? '')?.title ?? c ?? ''
 })
 const cancelMove = () => { moveId.value = null }
+
+/* ---------- культура на поле: переместить / убрать ---------- */
+const cropObjId = ref<number | null>(null)
+
+const activeCrop = computed<PlacedObject | null>(() => {
+  if (cropObjId.value == null) return null
+  return boardStore.board?.objects.find(o => o.id === cropObjId.value && o.kind === 'CROP') ?? null
+})
+const cropTitle = computed(() => {
+  const c = activeCrop.value?.crop ?? ''
+  return catalogStore.byCode(c)?.title ?? c
+})
+const cropLeft = computed(() => {
+  const o = activeCrop.value
+  return o ? Math.max(0, Math.ceil((toMs(o.readyAt) - now.value) / 1000)) : 0
+})
+const cropPct = computed(() => {
+  const o = activeCrop.value
+  if (!o) return 0
+  const start = toMs(o.plantedAt), end = toMs(o.readyAt)
+  if (!end || end <= start) return 1
+  return Math.min(Math.max((now.value - start) / (end - start), 0), 1)
+})
+const closeCrop = () => {
+  cropObjId.value = null
+}
+const startMoveCrop = () => {
+  const o = activeCrop.value
+  if (!o) return
+  buildMode.value = false
+  moveId.value = o.id
+  closeCrop()
+}
+const onRemoveCrop = async () => {
+  const userId = authStore.user?.id
+  const o = activeCrop.value
+  if (!userId || !o || busy.value) return
+  busy.value = true
+  try {
+    const res = await boardStore.removeObject(code.value, userId, o.id)
+    if (res.success) closeCrop()
+  } finally {
+    busy.value = false
+  }
+}
 
 // превью на поле: при переносе — склад, иначе выбранная культура/здание (только в режиме строительства)
 const boardPreview = computed(() => {
   const m = moveObj.value
+  if (m && m.kind === 'CROP') {
+    // переносим культуру: призрак рисует FarmBoard кодом, PNG не нужен
+    return { width: m.width, height: m.height, kind: 'CROP' as const, src: undefined, code: m.crop }
+  }
   if (m) {
     const item = catalogStore.byCode(m.building ?? '')
     return {
@@ -1017,11 +1562,14 @@ const boardPreview = computed(() => {
 
 const onKey = (e: KeyboardEvent) => {
   if (e.key !== 'Escape') return
-  if (researchOpen.value) researchOpen.value = false
+  if (blackOpen.value) blackOpen.value = false
+  else if (deputyOpen.value) deputyOpen.value = false
+  else if (catalogOpen.value) closeCatalog()
+  else if (researchOpen.value) closeResearch()
   else if (traderOpen.value) traderOpen.value = false
   else if (marketOpen.value) marketOpen.value = false
   else if (dealsOpen.value) dealsOpen.value = false
-  else if (catalogOpen.value) catalogOpen.value = false
+  else if (cropObjId.value != null) closeCrop()
   else if (moveId.value != null) cancelMove()
   else if (buildMode.value) cancelBuild()
   else if (warehouseOpen.value) closeWarehouse()
@@ -1056,6 +1604,31 @@ onMounted(() => {
       client!.subscribe(`/topic/deals.${code.value}`, () => {
         dealsStore.load(code.value, userId)
         loadStorage()
+      })
+      // депутат: прогресс всех игроков и победитель
+      deputyStore.load(code.value)
+      client!.subscribe(`/topic/deputy.${code.value}`, (msg) => {
+        onDeputyEvent(JSON.parse(msg.body) as DeputyEvent)
+      })
+      // личные сообщения: по STOMP приходит только сигнал без текста
+      client!.subscribe(`/topic/chat.${code.value}.${userId}`, (msg) => {
+        const sig = JSON.parse(msg.body) as { fromId: number }
+        chatStore.onSignal(code.value, userId, sig.fromId, chatVisible.value)
+        if (!chatVisible.value) showToast('💬 Новое личное сообщение')
+      })
+      // визиты на чужие фермы: лимит и новости о разоблачениях
+      visitsStore.load(code.value, userId)
+      client!.subscribe(`/topic/visits.${code.value}`, (msg) => {
+        onVisitEvent(JSON.parse(msg.body) as VisitEvent)
+      })
+      // теневой скупщик: свой визит и чужие активные скупщики
+      blackStore.load(code.value, userId)
+      client!.subscribe(`/topic/blackmarket.${code.value}`, (msg) => {
+        onBlackEvent(JSON.parse(msg.body) as BmEvent)
+      })
+      // совет семей: при открытии/закрытии раунда сервер шлёт «changed»
+      client!.subscribe(`/topic/council.${code.value}`, () => {
+        councilStore.load(code.value, userId)
       })
       if (!boardStore.board) {
         await boardStore.loadMyBoard(code.value, userId)
@@ -1140,11 +1713,17 @@ const onObjectClick = async (obj: PlacedObject) => {
     boardStore.error = null
     factoryObjId.value = obj.id
     loadStorage() // нужен актуальный остаток ингредиентов
-    return
   }
 
-  if (obj.kind === 'CROP' && obj.readyAt && new Date(obj.readyAt) <= new Date()) {
-    await boardStore.harvest(code.value, userId, obj.id)
+  if (obj.kind === 'CROP') {
+    if (obj.readyAt && toMs(obj.readyAt) <= Date.now()) {
+      // созрела: забираем урожай, культура остаётся и растёт заново
+      await boardStore.harvest(code.value, userId, obj.id)
+    } else {
+      // ещё растёт: меню «Переместить / Убрать с поля»
+      boardStore.error = null
+      cropObjId.value = obj.id
+    }
   }
 }
 </script>

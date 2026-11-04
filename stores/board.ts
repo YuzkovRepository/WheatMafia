@@ -6,6 +6,16 @@ export interface Cell {
   objectId?: number | null
 }
 
+export interface QueuedJob {
+  recipeCode: string
+  output: string
+  outputQty?: number
+  time: number
+  inputs: Record<string, number>
+  startedAt?: string
+  readyAt?: string
+}
+
 export interface PlacedObject {
   id: number
   kind: 'CROP' | 'BUILDING'
@@ -30,6 +40,11 @@ export interface PlacedObject {
   productionOutputQty?: number
   productionTime?: number
   recipeCode?: string
+  /** забастовка: здание не работает до этого времени */
+  blockedUntil?: string
+
+  // очередь производства (ингредиенты уже списаны)
+  queue?: QueuedJob[]
 }
 
 export interface Board {
@@ -157,7 +172,37 @@ export const useBoardStore = defineStore('board', {
       }
     },
 
-    /** Запуск производства на заводе по рецепту (outputCode). */
+    /** Убрать культуру с поля. */
+    async removeObject(sessionCode: string, userId: number, objectId: number) {
+      this.error = null
+      try {
+        await $fetch(
+          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/remove/${objectId}`,
+          { method: 'POST', headers: authHeaders() }
+        )
+        return { success: true }
+      } catch (e: any) {
+        this.error = errMsg(e, 'Не удалось убрать')
+        return { success: false }
+      }
+    },
+
+    /** Убрать продукт из очереди производства (ингредиенты возвращаются на склад). */
+    async cancelQueued(sessionCode: string, userId: number, objectId: number, index: number) {
+      this.error = null
+      try {
+        await $fetch(
+          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/queue/${index}/cancel`,
+          { method: 'POST', headers: authHeaders() }
+        )
+        return { success: true }
+      } catch (e: any) {
+        this.error = errMsg(e, 'Не удалось убрать из очереди')
+        return { success: false }
+      }
+    },
+
+    /** Запуск производства на заводе по рецепту (outputCode); если завод занят — продукт встаёт в очередь. */
     async startProduction(
       sessionCode: string,
       userId: number,
@@ -178,11 +223,11 @@ export const useBoardStore = defineStore('board', {
     },
 
     /** Забрать готовую продукцию в склад. */
-    async collectProduction(sessionCode: string, userId: number, objectId: number) {
+    async collectProduction(sessionCode: string, userId: number, objectId: number, index = -1) {
       this.error = null
       try {
         await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/collect`,
+          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/collect?index=${index}`,
           { method: 'POST', headers: authHeaders() }
         )
         return { success: true }
@@ -193,3 +238,20 @@ export const useBoardStore = defineStore('board', {
     }
   }
 })
+
+/** Ячейки производства здания (со старым одиночным производством тоже работает). */
+export function jobsOf(o: PlacedObject): QueuedJob[] {
+  const list = [...(o.queue ?? [])]
+  if (o.productionReadyAt && o.productionOutput) {
+    list.unshift({
+      recipeCode: o.recipeCode ?? '',
+      output: o.productionOutput,
+      outputQty: o.productionOutputQty,
+      time: o.productionTime ?? 0,
+      inputs: {},
+      startedAt: o.productionStartedAt,
+      readyAt: o.productionReadyAt
+    })
+  }
+  return list
+}

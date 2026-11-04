@@ -18,6 +18,7 @@
           placeholder="Поиск по названию…"
           class="w-full rounded-lg border border-stone-300 px-3 py-1.5 text-sm text-stone-800"
         />
+        <p class="text-[11px] text-stone-400">Двойной клик по продукту — добавить в заметки</p>
         <div class="flex flex-wrap gap-1.5">
           <button
             v-for="r in regionTabs"
@@ -46,7 +47,10 @@
         <div
           v-for="p in list"
           :key="p.code"
-          class="rounded-xl border-2 border-stone-200 bg-white p-3"
+          :id="'cat-' + p.code"
+          class="rounded-xl border-2 bg-white p-3 transition-shadow select-none"
+          :class="focused === p.code ? 'border-sky-500 ring-2 ring-sky-300 shadow-lg' : 'border-stone-200'"
+          @dblclick="onDbl(p)"
         >
           <div class="flex items-center gap-3">
             <ProductIcon :code="p.code" :size="44" />
@@ -56,7 +60,7 @@
                 <span
                   v-if="regionOf(p.code)"
                   class="ml-1 px-1.5 py-0.5 rounded-md bg-stone-100 text-[11px] font-semibold text-stone-600 align-middle"
-                >{{ regionOf(p.code)!.flag }} {{ regionOf(p.code)!.name }}</span>
+                >{{ regionOf(p.code)!.flag }} {{ regionOf(p.code)!.name }}<template v-if="stageOf(p.code)"> · этап {{ stageOf(p.code) }}</template></span>
                 <span v-else class="ml-1 px-1.5 py-0.5 rounded-md bg-stone-100 text-[11px] text-stone-400 align-middle">🌍 общий</span>
                 <span v-if="p.legality === 'ILLEGAL'" class="ml-1 text-[11px] font-semibold text-red-600">🚫 нелегально</span>
               </div>
@@ -87,10 +91,66 @@
 
 <script setup lang="ts">
 import { useCatalogStore } from '~/stores/catalog'
+import { useNotesStore } from '~/stores/notes'
+import { useProductIndexStore } from '~/stores/productIndex'
 import { fmtDuration, productEmoji } from '~/utils/productLook'
 
+const props = defineProps<{
+  /** Код продукта, который надо найти и подсветить (переход из дерева исследований) */
+  focus?: string | null
+}>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 const catalog = useCatalogStore()
+const notes = useNotesStore()
+const idx = useProductIndexStore()
+const focused = ref<string | null>(null)
+let focusTimer: ReturnType<typeof setTimeout> | null = null
+onBeforeUnmount(() => { if (focusTimer) clearTimeout(focusTimer) })
+
+onMounted(() => { idx.load() })
+
+// этап: точный (из research-index), иначе запасной расчёт по цепочке своей страны
+const stageMemo = new Map<string, number>()
+const calcStage = (code: string, guard = new Set<string>()): number => {
+  const r = catalog.recipes.find(x => x.outputCode === code)
+  if (!r) return 1
+  if ((catalog.byCode(r.factoryCode) as any)?.kind === 'CROP') return 1
+  if (stageMemo.has(code)) return stageMemo.get(code)!
+  if (guard.has(code)) return 2
+  guard.add(code)
+  const reg = regionCode(code)
+  let st = 2
+  for (const i of r.inputs ?? []) {
+    if (regionCode(i.code) === reg) st = Math.max(st, calcStage(i.code, guard) + 1)
+  }
+  guard.delete(code)
+  stageMemo.set(code, st)
+  return st
+}
+const stageOf = (code: string): number | null =>
+  idx.of(code)?.stage ?? (catalog.recipes.some(r => r.outputCode === code) ? calcStage(code) : null)
+
+const onDbl = (p: { code: string; title: string }) => {
+  try { window.getSelection()?.removeAllRanges() } catch { /* ignore */ }
+  notes.addProduct(p.code, p.title)
+}
+
+/* переход из исследований: ищем продукт, показываем все страны и подсвечиваем карточку */
+const showFocus = async () => {
+  const code = props.focus
+  if (!code) return
+  const p = catalog.productByCode(code)
+  if (!p) return
+  query.value = ''
+  tab.value = 'ALL'
+  region.value = 'ALL'
+  await nextTick()
+  const el = document.getElementById('cat-' + code)
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  focused.value = code
+  if (focusTimer) clearTimeout(focusTimer)
+  focusTimer = setTimeout(() => { focused.value = null }, 4000)
+}
 
 const query = ref('')
 const tab = ref<'ALL' | 'CROP' | 'MATERIAL' | 'GOODS'>('ALL')
@@ -156,7 +216,8 @@ const makers = (code: string) =>
           .map(i => {
             const own = regionCode(code)
             const rc = regionCode(i.code)
-            const flag = rc && rc !== own ? ` ${REGIONS[rc]?.flag ?? '🌍'}` : ''
+            const st = stageOf(i.code)
+            const flag = rc && rc !== own ? ` ${REGIONS[rc]?.flag ?? '🌍'}${st ? ' эт.' + st : ''}` : ''
             return `${productEmoji(i.code)} ${i.title || titleOf(i.code)}${flag} ×${i.qty}`
           })
           .join(', ')
@@ -169,4 +230,6 @@ const usedIn = (code: string) =>
     .filter(r => (r.inputs ?? []).some(i => i.code === code))
     .map(r => `${productEmoji(r.outputCode)} ${r.outputTitle || titleOf(r.outputCode)}`)
     .join(', ')
+
+watch(() => [props.focus, catalog.products.length], showFocus, { immediate: true, flush: 'post' })
 </script>

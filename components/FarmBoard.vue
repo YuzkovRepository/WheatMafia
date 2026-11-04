@@ -629,12 +629,24 @@
         <polyline :points="lip" fill="none" stroke="#4f7d2b" stroke-width="5" stroke-linejoin="round" />
       </svg>
 
+      <!-- Просёлочная дорога вдоль переднего края поля: по ней приезжает теневой скупщик -->
+      <svg class="road" :width="W" :height="H" :viewBox="`0 0 ${W} ${H}`">
+        <polyline :points="road.line" class="r-edge" />
+        <polyline :points="road.line" class="r-bed" />
+        <polyline :points="road.trackA" class="r-track" />
+        <polyline :points="road.trackB" class="r-track" />
+        <polyline :points="road.line" class="r-dash" />
+        <!-- место остановки -->
+        <line class="r-stop" :x1="road.px" :y1="road.py - 17" :x2="road.px" :y2="road.py + 17" />
+        <ellipse v-if="buyerSprite?.waiting" class="r-pad" :cx="road.px" :cy="road.py + 4" rx="62" ry="17" />
+      </svg>
+
       <!-- Плоскость поля (повёрнута в изометрию) -->
       <div class="plane" :style="planeStyle">
         <div class="grass" />
 
         <div v-for="o in crops" :key="'soil' + o.id" class="soil"
-             :class="{ ready: isReady(o) }"
+             :class="{ ready: isReady(o), moving: o.id === ignoreId }"
              :style="rectStyle(o.col, o.row, o.width, o.height, 3)" />
 
         <div v-if="preview" class="preview" :class="{ bad: !preview.valid }"
@@ -664,8 +676,9 @@
           <!-- КУЛЬТУРЫ: всегда рисуем кодом (CropField), PNG не используем -->
           <template v-if="s.field">
             <CropField :kind="s.field" :w="s.w" :h="s.h" :cell="cell"
-                       :stage="s.stage" :seed="s.id" :style="s.fieldStyle" />
-            <div class="fl" :style="s.labelStyle">
+                       :stage="s.stage" :seed="s.id" :style="s.fieldStyle"
+                       :class="{ 'field-moving': s.moving }" />
+            <div v-show="!s.moving" class="fl" :style="s.labelStyle">
               <div v-if="s.ready" class="bubble">✓</div>
               <div v-else class="bar"><div class="fill" :style="{ width: s.pct * 100 + '%' }" /></div>
             </div>
@@ -685,11 +698,21 @@
             <!-- что производится + трекер загрузки -->
             <div v-if="s.prod" class="prodtag" :class="{ done: s.prod.done }" :style="s.prodStyle">
               <span class="pico">{{ s.prod.emoji }}</span>
-              <span v-if="s.prod.done" class="pdone">Готово</span>
+              <span v-if="s.prod.blocked" class="pdone">Забастовка</span>
+              <span v-else-if="s.prod.done" class="pdone">Готово</span>
               <div v-else class="pbar"><div class="fill" :style="{ width: s.prod.pct * 100 + '%' }" /></div>
+              <span v-if="s.prod.queued" class="pq">+{{ s.prod.queued }}</span>
             </div>
           </template>
         </template>
+
+        <!-- теневой скупщик: едет по дороге, встаёт у фермы, после сделки уезжает -->
+        <div v-if="buyerSprite" class="sprite buyer" :style="buyerSprite.style" @click.stop="emit('buyer-click')">
+          <div v-if="buyerSprite.label" class="blabel" :class="{ ready: buyerSprite.waiting }">{{ buyerSprite.label }}</div>
+          <img v-if="!broken.has(BUYER_SRC)" :src="BUYER_SRC" alt="" draggable="false"
+               :class="{ flip: buyerSprite.flip }" @error="broken.add(BUYER_SRC)" />
+          <div v-else class="buyer-missing" :class="{ flip: buyerSprite.flip }">🛵</div>
+        </div>
 
         <!-- «призрак» выбранной культуры -->
         <CropField v-if="ghostField" class="ghost-field" :kind="ghostField.kind"
@@ -710,7 +733,8 @@
 </template>
 
 <script setup lang="ts">
-import type { PlacedObject, Cell } from '~/stores/board'
+import { jobsOf } from '~/stores/board'
+import type { PlacedObject, Cell, QueuedJob } from '~/stores/board'
 import { useCatalogStore } from '~/stores/catalog'
 import { objectSrc } from '~/utils/objectSrc'
 import { cropKind, fieldBox } from '~/utils/cropLook'
@@ -729,13 +753,16 @@ const props = withDefaults(
     ignoreId?: number | null
     /** режим размещения: показывает превью-призрак и разрешает клики по пустым клеткам */
     active?: boolean
+    /** визит теневого скупщика (время в мс сервера; offsetMs = серверные − локальные часы); null — скупщика нет */
+    buyer?: { summonedAtMs: number; arrivesAtMs: number; leavesAtMs: number; offsetMs: number } | null
   }>(),
-  { cellPx: 56, plantWidth: 2, plantHeight: 2, previewKind: 'CROP', ignoreId: null, active: false }
+  { cellPx: 56, plantWidth: 2, plantHeight: 2, previewKind: 'CROP', ignoreId: null, active: false, buyer: null }
 )
 
 const emit = defineEmits<{
   (e: 'object-click', obj: PlacedObject): void
   (e: 'cell-click', cell: Cell): void
+  (e: 'buyer-click'): void
 }>()
 
 const catalogStore = useCatalogStore()
@@ -743,7 +770,7 @@ const catalogStore = useCatalogStore()
 /* ---------- настройки внешнего вида ---------- */
 const PAD_X = 40
 const PAD_TOP = 200
-const PAD_BOTTOM = 40
+const PAD_BOTTOM = 80 // внизу место под дорогу скупщика
 const SLAB = 30
 const CROP_K = 1
 const BUILDING_K = 1.1
@@ -766,12 +793,20 @@ const stageOf = (pct: number, ready: boolean) =>
   ready ? 4 : pct < 0.2 ? 0 : pct < 0.45 ? 1 : pct < 0.7 ? 2 : 3
 
 /* ---------- производство на заводах ---------- */
-const isProducing = (o: PlacedObject) =>
-  o.kind === 'BUILDING' && !!o.productionStartedAt && !!o.productionReadyAt
-const prodDone = (o: PlacedObject) => isProducing(o) && now.value >= toMs(o.productionReadyAt)
+const jobDone = (j: QueuedJob) => now.value >= toMs(j.readyAt)
+const isProducing = (o: PlacedObject) => o.kind === 'BUILDING' && jobsOf(o).length > 0
+/** Есть хотя бы один готовый к выдаче продукт. */
+const prodDone = (o: PlacedObject) => isProducing(o) && jobsOf(o).some(jobDone)
+/** Показываем готовый продукт, а если готовых нет — тот, что делается сейчас. */
+const prodJob = (o: PlacedObject) => {
+  const jobs = jobsOf(o)
+  return jobs.find(jobDone) ?? jobs[0]
+}
 const prodProgress = (o: PlacedObject) => {
-  const start = toMs(o.productionStartedAt), end = toMs(o.productionReadyAt)
-  if (!end || end <= start) return prodDone(o) ? 1 : 0
+  const j = prodJob(o)
+  if (!j) return 0
+  const start = toMs(j.startedAt), end = toMs(j.readyAt)
+  if (!end || end <= start) return jobDone(j) ? 1 : 0
   return clamp((now.value - start) / (end - start), 0, 1)
 }
 
@@ -852,6 +887,97 @@ watch(
   { flush: 'post' }
 )
 
+/* ---------- дорога и теневой скупщик ---------- */
+const BUYER_SRC = '/object/illegal_buyer.png'
+const DEPART_MS = 6000        // столько скупщик уезжает (как в окне скупщика)
+const ROAD_W = 34
+const ROAD_OFF = SLAB + 34    // дорога идёт параллельно левому переднему краю, чуть ниже земляного среза
+const BUYER_START_X = -170    // откуда он выезжает (за левым краем сцены)
+
+// y центра дороги в точке x: передний край ромба имеет уклон 1:2
+const roadY = (x: number) => cy.value + hh.value + ROAD_OFF - Math.abs(x - cx.value) * 0.5
+const roadEndX = computed(() => cx.value - hw.value * 0.12) // дорога заканчивается тупиком у фермы
+const parkX = computed(() => cx.value - hw.value * 0.3)     // где скупщик встаёт
+
+const road = computed(() => {
+  const x0 = BUYER_START_X - 240
+  const x1 = roadEndX.value
+  const pts = (dy: number) => `${x0},${roadY(x0) + dy} ${x1},${roadY(x1) + dy}`
+  const px = parkX.value
+  return { line: pts(0), trackA: pts(-7), trackB: pts(7), px, py: roadY(px) }
+})
+
+const buyerNow = ref(Date.now())
+const leaveGhost = ref<{ startedAt: number; q0: number } | null>(null)
+let lastFrac = 0
+let buyerTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  buyerTimer = setInterval(() => {
+    const g = leaveGhost.value
+    if (g && Date.now() - g.startedAt >= DEPART_MS) leaveGhost.value = null
+    if (props.buyer || leaveGhost.value) {
+      buyerNow.value = Date.now()
+      if (buyerSprite.value && !leaveGhost.value) lastFrac = buyerSprite.value.frac
+    }
+  }, 100)
+})
+onBeforeUnmount(() => { if (buyerTimer) clearInterval(buyerTimer) })
+
+type BuyerPhase = 'NONE' | 'ARRIVING' | 'PRESENT' | 'LEAVING'
+const buyerPhase = computed<BuyerPhase>(() => {
+  const b = props.buyer
+  if (!b) return 'NONE'
+  const t = buyerNow.value + b.offsetMs
+  if (t >= b.leavesAtMs) return 'NONE'
+  if (t < b.arrivesAtMs) return 'ARRIVING'
+  if (t < b.leavesAtMs - DEPART_MS) return 'PRESENT'
+  return 'LEAVING'
+})
+
+// скупщика отпустили/продали раньше срока — он разворачивается и уезжает по дороге
+watch(buyerPhase, (ph, old) => {
+  if (ph === 'NONE' && (old === 'ARRIVING' || old === 'PRESENT') && lastFrac > 0.02) {
+    leaveGhost.value = { startedAt: Date.now(), q0: lastFrac }
+  } else if (ph !== 'NONE') {
+    leaveGhost.value = null
+  }
+})
+
+const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+
+const buyerSprite = computed(() => {
+  const T = buyerNow.value
+  // f: 0 — за левым краем, 1 — на месте остановки
+  const place = (f: number) => {
+    const x = BUYER_START_X + (parkX.value - BUYER_START_X) * f
+    return { left: `${x}px`, top: `${roadY(x) + 8}px`, width: `${cell.value * 2}px`, zIndex: 3000 }
+  }
+
+  const g = leaveGhost.value
+  if (g) {
+    const f = g.q0 * (1 - clamp((T - g.startedAt) / DEPART_MS, 0, 1))
+    return { style: place(f), flip: true, waiting: false, label: '', frac: f }
+  }
+
+  const b = props.buyer
+  const ph = buyerPhase.value
+  if (!b || ph === 'NONE') return null
+  const t = T + b.offsetMs
+
+  if (ph === 'ARRIVING') {
+    const f = clamp((t - b.summonedAtMs) / Math.max(1, b.arrivesAtMs - b.summonedAtMs), 0, 1)
+    const left = Math.max(0, Math.ceil((b.arrivesAtMs - t) / 1000))
+    return { style: place(f), flip: false, waiting: false, label: `🛵 едет… ${left}с`, frac: f }
+  }
+  if (ph === 'PRESENT') {
+    const left = Math.max(0, Math.ceil((b.leavesAtMs - DEPART_MS - t) / 1000))
+    return { style: place(1), flip: false, waiting: true, label: `💰 Продаём? ${mmss(left)}`, frac: 1 }
+  }
+  // последние секунды визита: разворот и отъезд
+  const f = clamp((b.leavesAtMs - t) / DEPART_MS, 0, 1)
+  return { style: place(f), flip: true, waiting: false, label: '', frac: f }
+})
+
 /* ---------- декор ---------- */
 type DecorKind = 'tree' | 'pine' | 'bush' | 'rock' | 'flower'
 const DECOR_SPEC: Record<DecorKind, { w: number; ratio: number }> = {
@@ -889,6 +1015,11 @@ const decor = computed(() => {
     const w = spec.w * cell.value * (0.8 + rnd() * 0.4)
     const h = w * spec.ratio
     if (y - h < 4) continue
+    // не сажаем деревья и камни на дорогу скупщика
+    if (x < roadEndX.value + 80) {
+      const ry = roadY(x)
+      if (y >= ry - ROAD_W / 2 - 12 && y - h <= ry + ROAD_W / 2 + 8) continue
+    }
     if (out.some(o => Math.hypot(o.x - x, (o.y - y) * 1.7) < (o.w + w) * 0.3)) continue
 
     const alt = rnd() < 0.5
@@ -963,11 +1094,14 @@ const sprites = computed(() =>
     const c = project(o.col + o.width / 2, o.row + o.height / 2)
 
     const halfW = ((o.width + o.height) * cell.value * K) / 2
-    const prod = isProducing(o)
+    const blocked = o.kind === 'BUILDING' && !!o.blockedUntil && now.value < toMs(o.blockedUntil)
+    const prod = isProducing(o) || blocked
       ? {
-          emoji: productEmoji(o.productionOutput),
+          blocked,
+          emoji: blocked ? '✊' : productEmoji(prodJob(o)?.output),
           pct: prodProgress(o),
-          done: prodDone(o)
+          done: prodDone(o),
+          queued: Math.max(0, jobsOf(o).length - 1)
         }
       : null
 
@@ -1057,7 +1191,7 @@ const hoverReady = computed(() => {
   const h = hover.value
   if (!h) return false
   const o = owner.value.get(Math.floor(h.row) * size.value + Math.floor(h.col))
-  return !!o && (o.kind === 'BUILDING' || isReady(o))
+  return !!o // на любой объект можно кликнуть: завод, склад, культура (созрела — собрать, иначе — меню)
 })
 
 const onClick = (e: MouseEvent) => {
@@ -1096,6 +1230,19 @@ const onClick = (e: MouseEvent) => {
 .slab { position: absolute; left: 0; top: 0; pointer-events: none; }
 .decor { position: absolute; left: 0; top: 0; pointer-events: none; }
 
+/* дорога скупщика */
+.road { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.r-edge { fill: none; stroke: #6a4a2a; stroke-width: 42; stroke-linecap: round; opacity: 0.9; }
+.r-bed { fill: none; stroke: #bf9560; stroke-width: 34; stroke-linecap: round; }
+.r-track { fill: none; stroke: rgba(80, 50, 20, 0.28); stroke-width: 4; stroke-linecap: round; }
+.r-dash { fill: none; stroke: rgba(255, 245, 210, 0.6); stroke-width: 2; stroke-dasharray: 16 14; }
+.r-stop { stroke: rgba(250, 204, 21, 0.55); stroke-width: 4; stroke-linecap: round; }
+.r-pad {
+  fill: rgba(250, 204, 21, 0.2); stroke: #facc15; stroke-width: 3; stroke-dasharray: 8 6;
+  animation: pad 1.2s ease-in-out infinite;
+}
+@keyframes pad { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
 .plane { position: absolute; transform-origin: 50% 50%; transform: scaleY(0.5) rotate(45deg); pointer-events: none; }
 .grass {
   position: absolute; inset: 0;
@@ -1119,6 +1266,7 @@ const onClick = (e: MouseEvent) => {
   background: repeating-linear-gradient(90deg, #8a5a32 0 10px, #7a4d2a 10px 20px);
   box-shadow: inset 0 0 0 2px #5e3b1f, inset 0 0 14px rgba(0, 0, 0, 0.35);
 }
+.soil.moving, .field-moving { opacity: 0.35; }
 .soil.ready { box-shadow: inset 0 0 0 2px #facc15, 0 0 14px rgba(250, 204, 21, 0.8); }
 
 .preview {
@@ -1139,6 +1287,16 @@ const onClick = (e: MouseEvent) => {
   filter: drop-shadow(0 0 8px rgba(255, 214, 64, 0.95)) drop-shadow(0 6px 4px rgba(0, 0, 0, 0.28));
 }
 .sprite.moving { opacity: 0.4; }
+.sprite.buyer { pointer-events: auto; cursor: pointer; transition: left 0.1s linear, top 0.1s linear; }
+.buyer img.flip, .buyer-missing.flip { transform: scaleX(-1); }
+.buyer-missing { font-size: 64px; line-height: 1; text-align: center; }
+.blabel {
+  position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%); margin-bottom: 2px;
+  padding: 2px 9px; border-radius: 9px; white-space: nowrap;
+  font: 700 11px sans-serif; color: #fde68a; background: rgba(28, 20, 12, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.blabel.ready { background: #fbbf24; color: #1c1917; border-color: #fff3c4; animation: bob 1s ease-in-out infinite; }
 .ghost { opacity: 0.65; }
 .ghost-field { opacity: 0.7; }
 
@@ -1182,5 +1340,6 @@ const onClick = (e: MouseEvent) => {
 .prodtag.done { border-color: #facc15; box-shadow: 0 0 10px rgba(250, 204, 21, 0.85); }
 .pico { font-size: 17px; line-height: 1; }
 .pbar { width: 46px; height: 6px; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, 0.2); }
+.pq { font: 700 10px sans-serif; color: #fde68a; background: rgba(255, 255, 255, 0.16); padding: 0 5px; border-radius: 8px; }
 .pdone { font: 700 11px sans-serif; color: #fde68a; }
 </style>

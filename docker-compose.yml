@@ -1,0 +1,17 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wheatmafia-frontend
+    ports:
+      - "3003:3000"
+    environment:
+      - NUXT_PUBLIC_API_BASE=http://localhost:8080/api
+    networks:
+      - wheatmafia-net
+
+networks:
+  wheatmafia-net:
+    name: wheatmafia-net
+    external: true

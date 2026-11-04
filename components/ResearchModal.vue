@@ -29,8 +29,62 @@
         </div>
       </div>
 
+      <!-- режим: список исследований / цепочка производства -->
+      <div class="shrink-0 px-5 pt-3 flex flex-wrap items-center gap-2">
+        <button
+          v-for="v in views"
+          :key="v.key"
+          @click="view = v.key"
+          class="px-3 py-1.5 rounded-xl text-sm font-semibold transition"
+          :class="view === v.key ? 'bg-stone-800 text-amber-300' : 'bg-stone-200 text-stone-600 hover:bg-stone-300'"
+        >
+          {{ v.label }}
+        </button>
+        <span class="text-xs text-stone-400 ml-auto hidden sm:block">Двойной клик по карточке — добавить продукт в заметки</span>
+      </div>
+
+      <!-- цепочки производства -->
+      <div v-if="view === 'chain'" class="min-h-0 flex-1 p-5 pt-3 flex flex-col md:flex-row gap-3 overflow-hidden">
+        <div class="md:w-72 shrink-0 flex flex-col min-h-0 max-h-56 md:max-h-none">
+          <input
+            v-model="chainQuery"
+            placeholder="Найти продукт…"
+            class="w-full rounded-lg border border-stone-300 px-3 py-1.5 text-sm text-stone-800"
+          />
+          <p class="mt-1.5 text-[11px] text-stone-400">
+            Только продукты вашей страны. Чужие появятся в цепочке как ингредиенты.
+          </p>
+          <div class="mt-1.5 min-h-0 flex-1 overflow-y-auto space-y-1 pr-1">
+            <button
+              v-for="p in chainPickList"
+              :key="p.code"
+              @click="chainRoot = p.code"
+              @dblclick="addNote(p.code)"
+              class="w-full text-left flex items-center gap-2 rounded-lg border px-2 py-1.5 text-sm transition"
+              :class="chainRoot === p.code
+                ? 'border-amber-400 bg-amber-50'
+                : 'border-stone-200 bg-white hover:bg-stone-50'"
+            >
+              <span class="text-lg leading-none">{{ productEmoji(p.code) }}</span>
+              <span class="min-w-0 flex-1">
+                <span class="block font-semibold text-stone-800 truncate">{{ p.title }}</span>
+                <span class="block text-[11px] text-stone-500">{{ regionStageLabel(p.region, p.stage) }}</span>
+              </span>
+              <span v-if="p.status === 'done'" class="text-lime-600 text-xs">✓</span>
+            </button>
+            <p v-if="!chainPickList.length" class="text-xs text-stone-400 text-center py-4">Ничего не найдено</p>
+          </div>
+        </div>
+        <ProductChain
+          class="flex-1 min-w-0 min-h-0"
+          :root="chainRoot"
+          @navigate="onChainNavigate"
+          @note="addNote"
+        />
+      </div>
+
       <!-- вкладки этапов -->
-      <div class="shrink-0 px-5 pt-3 pb-1 flex gap-2 overflow-x-auto overflow-y-hidden">
+      <div v-show="view === 'list'" class="shrink-0 px-5 pt-3 pb-1 flex gap-2 overflow-x-auto overflow-y-hidden">
         <button
           v-for="s in stageList"
           :key="s"
@@ -55,7 +109,7 @@
       </div>
 
       <!-- фильтры -->
-      <div class="shrink-0 px-5 pt-3 pb-1 flex flex-wrap items-center gap-2">
+      <div v-show="view === 'list'" class="shrink-0 px-5 pt-3 pb-1 flex flex-wrap items-center gap-2">
         <button
           v-for="f in filters"
           :key="f.key"
@@ -71,7 +125,7 @@
       </div>
 
       <!-- карточки -->
-      <div class="min-h-0 flex-1 p-5 pt-3 overflow-y-auto space-y-3">
+      <div v-show="view === 'list'" ref="scrollEl" class="min-h-0 flex-1 p-5 pt-3 overflow-y-auto space-y-3">
         <p v-if="store.error" class="bg-red-100 border border-red-300 text-red-700 text-sm rounded-xl p-2">
           {{ store.error }}
         </p>
@@ -80,12 +134,10 @@
           <div
             v-for="n in visible"
             :key="n.code"
-            class="rounded-xl border-2 bg-white p-3 flex flex-col"
-            :class="statusOf(n) === 'done'
-              ? 'border-lime-400'
-              : statusOf(n) === 'ready'
-                ? 'border-amber-400 shadow-md'
-                : 'border-stone-200'"
+            :ref="el => setItemRef(n.code, el as HTMLElement | null)"
+            class="rounded-xl border-2 bg-white p-3 flex flex-col transition-shadow"
+            :class="cardClass(n)"
+            @dblclick="onCardDbl(n)"
           >
             <!-- заголовок -->
             <div class="flex items-start gap-3">
@@ -106,6 +158,16 @@
                 </div>
                 <div v-if="n.factoryTitle && n.factoryCode !== n.outputCode" class="text-xs text-stone-500 mt-0.5">
                   Производится в: 🏭 {{ n.factoryTitle }}
+                </div>
+                <div class="mt-0.5 flex items-center gap-2 text-[11px] text-stone-500">
+                  <span>{{ regionStageLabel(store.region, n.stage) }}</span>
+                  <button
+                    v-if="n.outputCode && n.stage > 1"
+                    @click.stop="showChain(n.outputCode)"
+                    class="px-1.5 py-0.5 rounded-md bg-stone-100 hover:bg-stone-200 font-semibold text-stone-700"
+                  >
+                    🌳 Цепочка
+                  </button>
                 </div>
               </div>
             </div>
@@ -141,13 +203,17 @@
                   <span
                     v-for="(ing, j) in r.inputs"
                     :key="ing.code + j"
-                    class="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px]"
+                    class="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] cursor-pointer select-none"
                     :class="have(ing.code) >= ing.qty
                       ? 'border-lime-300 bg-lime-50 text-lime-800'
                       : 'border-stone-300 bg-white text-stone-600'"
-                    :title="have(ing.code) >= ing.qty ? 'Есть на складе' : 'Пока не хватает — возможно, придётся обменять у других игроков'"
+                    :title="'Клик — цепочка · двойной клик — в заметки'"
+                    @click.stop="chipCd.onClick(ing.code)"
+                    @dblclick.stop="chipCd.onDbl(ing.code)"
                   >
-                    {{ productEmoji(ing.code) }} {{ ing.title }} ×{{ ing.qty }}
+                    {{ productEmoji(ing.code) }} {{ ing.title }}
+                    <template v-if="foreignTag(ing.code)">{{ foreignTag(ing.code) }}</template>
+                    ×{{ ing.qty }}
                   </span>
                 </div>
                 <div v-else class="text-[11px] text-stone-500 mt-0.5">Ингредиенты не нужны</div>
@@ -226,20 +292,32 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useResearchStore, type ResearchNode } from '~/stores/research'
 import { useCatalogStore } from '~/stores/catalog'
 import { useAuthStore } from '~/stores/auth'
+import { useNotesStore } from '~/stores/notes'
+import { useProductIndexStore } from '~/stores/productIndex'
 import { productEmoji, fmtDuration } from '~/utils/productLook'
+import { regionStageLabel, regionInfo } from '~/utils/regions'
+import { useClickDbl } from '~/utils/clickDbl'
 
-const props = defineProps<{ code: string }>()
-defineEmits<{ (e: 'close'): void }>()
+const props = defineProps<{
+  code: string
+  /** Код исследования, к которому надо проскроллить и подсветить */
+  highlight?: string | null
+  /** Этап, на который надо переключиться (если известен) */
+  highlightStage?: number | null
+}>()
+const emit = defineEmits<{ (e: 'close'): void; (e: 'open-catalog', code: string): void }>()
 
 const store = useResearchStore()
 const catalog = useCatalogStore()
 const auth = useAuthStore()
 
-onMounted(() => { catalog.load() })
+const notes = useNotesStore()
+const idx = useProductIndexStore()
+onMounted(() => { catalog.load(); idx.load() })
 
 type Status = 'done' | 'ready' | 'locked'
 type FilterKey = 'all' | 'ready' | 'done' | 'locked'
@@ -256,7 +334,6 @@ const statusOf = (n: ResearchNode): Status =>
 
 const emojiOf = (n: ResearchNode) => productEmoji(n.outputCode ?? n.factoryCode ?? '')
 
-// что открывает это исследование (здание или культуру) — берём из каталога
 const opensOf = (n: ResearchNode) =>
   catalog.factories.filter(f => f.requiredResearch === n.code)
 
@@ -290,12 +367,28 @@ const totalPct = computed(() =>
 )
 
 const activeStage = ref<number | null>(null)
+
+/** Узел с кодом highlight (если есть) — знаем его этап, чтобы переключиться. */
+/** Подсветка: переход из цепочки перекрывает highlight из пропсов. */
+const localHl = ref<string | null>(null)
+const hlCode = computed(() => localHl.value ?? props.highlight ?? null)
+const highlightNode = computed<ResearchNode | null>(() => {
+  const c = hlCode.value
+  return c ? (nodeByCode.value.get(c) ?? null) : null
+})
+
 watch(
   stageList,
   (list) => {
     if (!list.length) return
+    // приоритет: highlightStage → этап самого highlight-узла → «есть готовые» → первый
+    const preferred =
+      props.highlightStage ??
+      highlightNode.value?.stage ??
+      list.find(s => stageStats(s).ready > 0) ??
+      list[0]
     if (activeStage.value == null || !list.includes(activeStage.value)) {
-      activeStage.value = list.find(s => stageStats(s).ready > 0) ?? list[0]
+      activeStage.value = list.includes(preferred) ? preferred : list[0]
     }
   },
   { immediate: true }
@@ -338,9 +431,158 @@ const regionLabel = computed(() => {
   return map[store.region] ?? store.region ?? ''
 })
 
+/* ---------- подсветка нужного исследования ---------- */
+const itemRefs = new Map<string, HTMLElement>()
+const scrollEl = ref<HTMLElement | null>(null)
+const highlighted = ref<string | null>(null)
+let highlightTimer: ReturnType<typeof setTimeout> | null = null
+
+const setItemRef = (code: string, el: HTMLElement | null) => {
+  if (el) itemRefs.set(code, el)
+  else itemRefs.delete(code)
+}
+
+const cardClass = (n: ResearchNode) => {
+  if (highlighted.value === n.code) return 'border-sky-500 shadow-lg ring-2 ring-sky-300'
+  return statusOf(n) === 'done'
+    ? 'border-lime-400'
+    : statusOf(n) === 'ready'
+      ? 'border-amber-400 shadow-md'
+      : 'border-stone-200'
+}
+
+async function revealHighlight() {
+  const c = hlCode.value
+  if (!c) return
+  await nextTick()
+  const el = itemRefs.get(c)
+  if (!el) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  highlighted.value = c
+  if (highlightTimer) clearTimeout(highlightTimer)
+  highlightTimer = setTimeout(() => { highlighted.value = null }, 3500)
+}
+
+// Первая прокрутка/подсветка после того, как дерево и этапы готовы
+watch(
+  [() => store.tree, () => activeStage.value, () => hlCode.value],
+  async () => {
+    if (!store.tree) return
+    if (highlightNode.value && activeStage.value !== highlightNode.value.stage) {
+      // этап ещё не тот — переключимся (watch на stageList это уже сделал, но подстрахуемся)
+      activeStage.value = highlightNode.value.stage
+      await nextTick()
+    }
+    if (hlCode.value && visible.value.some(n => n.code === hlCode.value)) {
+      await revealHighlight()
+    }
+  },
+  { immediate: true }
+)
+
+// Если пользователь переключил этап — прокручиваем к подсветке, если это нужный этап
+watch(activeStage, async () => {
+  if (!hlCode.value) return
+  if (visible.value.some(n => n.code === hlCode.value)) await revealHighlight()
+})
+
+/* ---------- режимы: список / цепочки ---------- */
+type View = 'list' | 'chain'
+const views: { key: View; label: string }[] = [
+  { key: 'list', label: '📋 Список' },
+  { key: 'chain', label: '🌳 Цепочки' }
+]
+const view = ref<View>('list')
+const chainRoot = ref<string | null>(null)
+const chainQuery = ref('')
+
+const regionOfProduct = (code: string): string | null => {
+  const i = idx.of(code)?.region
+  if (i) return i
+  const r = ((catalog.recipes ?? []) as any[]).find(x => x.outputCode === code)
+  return r ? ((catalog.byCode(r.factoryCode) as any)?.region ?? null) : null
+}
+const stageOfProduct = (code: string): number | null => idx.of(code)?.stage ?? nodes.value.find(n => n.outputCode === code)?.stage ?? null
+
+/** Свои продукты: всё, что есть в вашем дереве исследований, плюс всё, что делается в зданиях вашей страны
+ *  (так в списке есть и золотой экспорт, даже если для него нет отдельного узла). Культуры не показываем. */
+const chainPickList = computed(() => {
+  const q = chainQuery.value.trim().toLowerCase()
+  const own = new Map<string, { code: string; title: string }>()
+  for (const n of nodes.value) {
+    if (n.outputCode && n.stage > 1) own.set(n.outputCode, { code: n.outputCode, title: n.outputTitle ?? n.title })
+  }
+  for (const p of ((catalog.products ?? []) as any[])) {
+    if (p.kind === 'CROP' || own.has(p.code)) continue
+    if (store.region && regionOfProduct(p.code) === store.region) own.set(p.code, { code: p.code, title: p.title })
+  }
+  return [...own.values()]
+    .map(p => {
+      const node = nodes.value.find(n => n.outputCode === p.code)
+      return {
+        code: p.code,
+        title: catalog.productByCode(p.code)?.title ?? p.title,
+        region: store.region || regionOfProduct(p.code),
+        stage: stageOfProduct(p.code),
+        status: node ? statusOf(node) : null
+      }
+    })
+    .filter(p => !q || p.title.toLowerCase().includes(q))
+    .sort((a, b) => (a.stage ?? 99) - (b.stage ?? 99) || a.title.localeCompare(b.title, 'ru'))
+})
+
+// по умолчанию — самый поздний продукт своей страны (финальное блюдо)
+watch(
+  [view, () => store.tree, () => idx.loaded],
+  () => {
+    if (view.value !== 'chain' || chainRoot.value) return
+    const best = [...chainPickList.value].sort((a, b) => (b.stage ?? 0) - (a.stage ?? 0))[0]
+    if (best) chainRoot.value = best.code
+  },
+  { immediate: true }
+)
+
+const showChain = (code: string) => {
+  chainRoot.value = code
+  view.value = 'chain'
+}
+
+/** Клик по строке цепочки: свой продукт — в список исследований, чужой — в справочник. */
+const onChainNavigate = async (code: string) => {
+  const node = nodes.value.find(n => n.outputCode === code)
+  if (node) {
+    view.value = 'list'
+    filter.value = 'all'
+    activeStage.value = node.stage
+    localHl.value = null
+    await nextTick()
+    localHl.value = node.code
+  } else {
+    emit('open-catalog', code)
+  }
+}
+
+/* ---------- заметки ---------- */
+const addNote = (code: string) => {
+  const title = catalog.productByCode(code)?.title ?? code
+  notes.addProduct(code, title)
+}
+const onCardDbl = (n: ResearchNode) => {
+  if (n.outputCode) addNote(n.outputCode)
+}
+const chipCd = useClickDbl<string>(showChain, addNote)
+
+/** Метка страны/этапа для чужих ингредиентов: «🇯🇵 эт.2». */
+const foreignTag = (code: string): string => {
+  const reg = regionOfProduct(code)
+  if (!reg || reg === store.region) return ''
+  const st = stageOfProduct(code)
+  return `${regionInfo(reg)?.flag ?? '🌍'}${st ? ' эт.' + st : ''}`
+}
+
 async function open(code: string) {
   const userId = auth.user?.id
   if (!userId) return
-  await store.open(props.code, userId, code) // ошибка попадёт в store.error
+  await store.open(props.code, userId, code)
 }
 </script>
