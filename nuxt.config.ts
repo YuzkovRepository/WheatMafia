@@ -54,7 +54,7 @@ export default defineNuxtConfig({
   
   runtimeConfig: {
     public: {
-      apiBase: '/api' // Добавьте это
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || 'https://wheatmafia-service.onrender.com/api'
     }
   },
   
