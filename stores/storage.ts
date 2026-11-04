@@ -6,33 +6,54 @@ export interface StorageItem {
   qty: number
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
-}
-
 const parseItems = (raw: any): StorageItem[] => {
-  const src = raw?.items ?? raw?.contents ?? raw?.stock ?? raw?.products
-  if (Array.isArray(src)) {
-    return src
-      .map((i: any) => ({
-        code: String(i.code ?? i.productCode ?? ''),
-        qty: Number(i.qty ?? i.quantity ?? i.amount ?? i.count ?? 0)
+  const source =
+    raw?.items ??
+    raw?.contents ??
+    raw?.stock ??
+    raw?.products
+
+  if (Array.isArray(source)) {
+    return source
+      .map((item: any) => ({
+        code: String(
+          item.code ??
+          item.productCode ??
+          ''
+        ),
+        qty: Number(
+          item.qty ??
+          item.quantity ??
+          item.amount ??
+          item.count ??
+          0
+        )
       }))
-      .filter(i => i.code && i.qty > 0)
+      .filter(item => item.code && item.qty > 0)
   }
-  const map = src && typeof src === 'object' ? src : raw
+
+  const map =
+    source && typeof source === 'object'
+      ? source
+      : raw
+
   if (map && typeof map === 'object') {
     const catalog = useCatalogStore()
+
     return Object.entries(map)
-      // голый объект {code: qty}: берём только известные продукты, без служебных полей
-      .filter(([k, v]) => typeof v === 'number' && (src ? true : !!catalog.productByCode(k)))
-      .map(([code, qty]) => ({ code, qty: qty as number }))
-      .filter(i => i.qty > 0)
+      .filter(([code, value]) => {
+        return (
+          typeof value === 'number' &&
+          (source ? true : !!catalog.productByCode(code))
+        )
+      })
+      .map(([code, qty]) => ({
+        code,
+        qty: qty as number
+      }))
+      .filter(item => item.qty > 0)
   }
+
   return []
 }
 
@@ -45,23 +66,38 @@ export const useStorageStore = defineStore('storage', {
   }),
 
   getters: {
-    total: (s): number => s.items.reduce((sum, i) => sum + i.qty, 0)
+    total: (state): number =>
+      state.items.reduce((sum, item) => sum + item.qty, 0)
   },
 
   actions: {
     async load(sessionCode: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
+
       try {
-        const raw = await $fetch<any>(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/storage`,
-          { headers: authHeaders() }
+        const raw = await $api<any>(
+          `/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/storage`
         )
+
         this.items = parseItems(raw)
-        const cap = raw?.capacity ?? raw?.maxCapacity ?? raw?.limit ?? null
-        this.capacity = typeof cap === 'number' ? cap : null
+
+        const capacity =
+          raw?.capacity ??
+          raw?.maxCapacity ??
+          raw?.limit ??
+          null
+
+        this.capacity =
+          typeof capacity === 'number' ? capacity : null
       } catch (e: any) {
-        this.error = e?.data?.message || e?.message || 'Не удалось загрузить склад'
+        console.error('LOAD STORAGE ERROR:', e)
+        this.error =
+          e?.data?.message ||
+          e?.message ||
+          'Не удалось загрузить склад'
       } finally {
         this.isLoading = false
       }

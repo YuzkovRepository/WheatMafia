@@ -6,12 +6,9 @@ interface SellResult {
   earned: number
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
+interface TraderPrice {
+  code: string
+  price: number
 }
 
 const RU: Array<[string, string]> = [
@@ -20,15 +17,16 @@ const RU: Array<[string, string]> = [
   ['Invalid quantity', 'Некорректное количество'],
   ['Product not found', 'Продукт не найден']
 ]
+
 const humanize = (e: any, fallback: string): string => {
   const raw: string = e?.data?.message || e?.message || ''
-  const hit = RU.find(([k]) => raw.includes(k))
-  return hit ? hit[1] : raw || fallback
+  const translation = RU.find(([english]) => raw.includes(english))
+
+  return translation ? translation[1] : raw || fallback
 }
 
 export const useTraderStore = defineStore('trader', {
   state: () => ({
-    /** code продукта -> цена скупки за 1 шт. Нет в таблице — скупщик не берёт. */
     prices: {} as Record<string, number>,
     isLoading: false,
     error: null as string | null
@@ -36,32 +34,54 @@ export const useTraderStore = defineStore('trader', {
 
   actions: {
     async loadPrices() {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
+
       try {
-        const list = await $fetch<Array<{ code: string; price: number }>>('/api/v1/trader/prices', {
-          headers: authHeaders()
-        })
-        this.prices = Object.fromEntries((list ?? []).map(p => [p.code, p.price]))
+        const prices = await $api<TraderPrice[]>('/v1/trader/prices')
+
+        this.prices = Object.fromEntries(
+          (prices ?? []).map(price => [price.code, price.price])
+        )
       } catch (e: any) {
+        console.error('LOAD TRADER PRICES ERROR:', e)
         this.error = humanize(e, 'Не удалось загрузить цены')
       } finally {
         this.isLoading = false
       }
     },
 
-    /** Продать скупщику. Возвращает заработанные монеты или null при ошибке. */
-    async sell(sessionCode: string, userId: number, productCode: string, quantity: number): Promise<number | null> {
+    async sell(
+      sessionCode: string,
+      userId: number,
+      productCode: string,
+      quantity: number
+    ): Promise<number | null> {
+      const { $api } = useNuxtApp()
+      const marketStore = useMarketStore()
+
       this.error = null
+
       try {
-        const res = await $fetch<SellResult>(
-          `/api/v1/trader/by-session/${sessionCode.toUpperCase()}/user/${userId}/sell`,
-          { method: 'POST', headers: authHeaders(), body: { productCode, quantity } }
+        const result = await $api<SellResult>(
+          `/v1/trader/by-session/${sessionCode.toUpperCase()}/user/${userId}/sell`,
+          {
+            method: 'POST',
+            body: {
+              productCode,
+              quantity
+            }
+          }
         )
-        // баланс общий с маркетплейсом
-        useMarketStore().coins = Number(res.coins)
-        return Number(res.earned)
+
+        marketStore.coins = Number(result.coins)
+
+        return Number(result.earned)
       } catch (e: any) {
+        console.error('SELL ERROR:', e)
         this.error = humanize(e, 'Не удалось продать')
+
         return null
       }
     }

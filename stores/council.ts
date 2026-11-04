@@ -1,6 +1,10 @@
 import { defineStore } from 'pinia'
 
-export type CouncilPhase = 'NONE' | 'SCHEDULED' | 'VOTING' | 'RESULT'
+export type CouncilPhase =
+  | 'NONE'
+  | 'SCHEDULED'
+  | 'VOTING'
+  | 'RESULT'
 
 export interface CouncilEvent {
   type: string
@@ -42,56 +46,72 @@ export interface CouncilState {
   result: CouncilResult | null
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
-}
-
 const errMsg = (e: any, fallback: string) =>
-  e?.data?.message || e?.data?.error || e?.message || fallback
+  e?.data?.message ||
+  e?.data?.error ||
+  e?.message ||
+  fallback
+
+const councilPath = (sessionCode: string, userId: number) =>
+  `/v1/council/by-session/${sessionCode.toUpperCase()}/user/${userId}`
 
 export const useCouncilStore = defineStore('council', {
   state: () => ({
     current: null as CouncilState | null,
-    /** serverNow - Date.now(): поправка часов клиента */
     offsetMs: 0,
     error: null as string | null
   }),
 
   actions: {
-    apply(s: CouncilState) {
-      this.current = s
-      this.offsetMs = s.serverNow - Date.now()
+    apply(state: CouncilState) {
+      this.current = state
+      this.offsetMs = state.serverNow - Date.now()
     },
 
     async load(sessionCode: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       try {
-        const s = await $fetch<CouncilState>(
-          `/api/v1/council/by-session/${sessionCode.toUpperCase()}/user/${userId}`,
-          { headers: authHeaders() }
+        const state = await $api<CouncilState>(
+          councilPath(sessionCode, userId)
         )
-        this.apply(s)
+
+        this.apply(state)
       } catch (e: any) {
+        console.error('LOAD COUNCIL ERROR:', e)
         this.error = errMsg(e, 'Не удалось загрузить совет')
       }
     },
 
-    async vote(sessionCode: string, userId: number, targetUserId: number) {
+    async vote(
+      sessionCode: string,
+      userId: number,
+      targetUserId: number
+    ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        const s = await $fetch<CouncilState>(
-          `/api/v1/council/by-session/${sessionCode.toUpperCase()}/user/${userId}/vote`,
-          { method: 'POST', headers: authHeaders(), body: { targetUserId } }
+        const state = await $api<CouncilState>(
+          `${councilPath(sessionCode, userId)}/vote`,
+          {
+            method: 'POST',
+            body: {
+              targetUserId
+            }
+          }
         )
-        this.apply(s)
+
+        this.apply(state)
+
         return { success: true }
       } catch (e: any) {
+        console.error('COUNCIL VOTE ERROR:', e)
         this.error = errMsg(e, 'Не удалось проголосовать')
-        // голосование могло закрыться — подтянем актуальное состояние
+
         await this.load(sessionCode, userId)
+
         return { success: false }
       }
     }

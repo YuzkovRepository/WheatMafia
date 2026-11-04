@@ -45,16 +45,14 @@ export interface DeputyEvent {
   state: DeputyState
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
-}
-
 const errMsg = (e: any, fallback: string) =>
-  e?.data?.message || e?.data?.error || e?.message || fallback
+  e?.data?.message ||
+  e?.data?.error ||
+  e?.message ||
+  fallback
+
+const deputyPath = (sessionCode: string) =>
+  `/v1/deputy/by-session/${sessionCode.toUpperCase()}`
 
 export const useDeputyStore = defineStore('deputy', {
   state: () => ({
@@ -64,46 +62,72 @@ export const useDeputyStore = defineStore('deputy', {
   }),
 
   getters: {
-    winner: (s): DeputyWinner | null => s.current?.winner ?? null,
+    winner: (state): DeputyWinner | null =>
+      state.current?.winner ?? null,
 
-    leaderboard: (s): DeputyPlayer[] =>
-      [...(s.current?.players ?? [])].sort(
-        (a, b) => b.delivered - a.delivered || a.nickName.localeCompare(b.nickName)
+    leaderboard: (state): DeputyPlayer[] =>
+      [...(state.current?.players ?? [])].sort(
+        (a, b) =>
+          b.delivered - a.delivered ||
+          a.nickName.localeCompare(b.nickName)
       )
   },
 
   actions: {
     async load(sessionCode: string) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
+
       try {
-        this.current = await $fetch<DeputyState>(
-          `/api/v1/deputy/by-session/${sessionCode.toUpperCase()}`,
-          { headers: authHeaders() }
+        this.current = await $api<DeputyState>(
+          deputyPath(sessionCode)
         )
       } catch (e: any) {
-        this.error = errMsg(e, 'Не удалось загрузить данные депутата')
+        console.error('LOAD DEPUTY ERROR:', e)
+        this.error = errMsg(
+          e,
+          'Не удалось загрузить данные депутата'
+        )
       } finally {
         this.isLoading = false
       }
     },
 
-    async feed(sessionCode: string, userId: number, productCode: string) {
+    async feed(
+      sessionCode: string,
+      userId: number,
+      productCode: string
+    ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        this.current = await $fetch<DeputyState>(
-          `/api/v1/deputy/by-session/${sessionCode.toUpperCase()}/user/${userId}/feed`,
-          { method: 'POST', body: { productCode }, headers: authHeaders() }
+        this.current = await $api<DeputyState>(
+          `${deputyPath(sessionCode)}/user/${userId}/feed`,
+          {
+            method: 'POST',
+            body: {
+              productCode
+            }
+          }
         )
+
         return { success: true }
       } catch (e: any) {
+        console.error('FEED DEPUTY ERROR:', e)
         this.error = errMsg(e, 'Депутат не принял блюдо')
+
         return { success: false }
       }
     },
 
-    applyEvent(ev: DeputyEvent) {
-      if (ev?.state) this.current = ev.state
+    applyEvent(event: DeputyEvent) {
+      if (event?.state) {
+        this.current = event.state
+      }
     }
   }
 })

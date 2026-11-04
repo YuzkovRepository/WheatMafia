@@ -18,7 +18,6 @@ export interface VisitCandidate {
   userId: number
   nickName: string
   region: string | null
-  /** сколько раз вы уже были на этой ферме */
   visits: number
 }
 
@@ -58,7 +57,6 @@ export interface VisitReport {
   state: VisitState
 }
 
-/** Событие /topic/visits.{code}: кого-то разоблачили (видят все игроки партии). */
 export interface VisitEvent {
   type: 'CAUGHT'
   visitorId: number
@@ -69,96 +67,141 @@ export interface VisitEvent {
   confiscatedUnits: number
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
-}
-
 const errMsg = (e: any, fallback: string) =>
-  e?.data?.message || e?.data?.error || e?.message || fallback
+  e?.data?.message ||
+  e?.data?.error ||
+  e?.message ||
+  fallback
 
-const base = (code: string, userId: number) =>
-  `/api/v1/visits/by-session/${code.toUpperCase()}/user/${userId}`
+const visitsPath = (code: string, userId: number) =>
+  `/v1/visits/by-session/${code.toUpperCase()}/user/${userId}`
 
 export const useVisitsStore = defineStore('visits', {
   state: () => ({
     current: null as VisitState | null,
     view: null as VisitView | null,
-    /** serverNow − Date.now() */
     offsetMs: 0,
     error: null as string | null,
     lastReport: null as VisitReport | null
   }),
 
   actions: {
-    apply(s: VisitState) {
-      this.current = s
-      this.offsetMs = s.serverNowMs - Date.now()
+    apply(state: VisitState) {
+      this.current = state
+      this.offsetMs = state.serverNowMs - Date.now()
     },
 
     async load(code: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       try {
-        this.apply(await $fetch<VisitState>(base(code, userId), { headers: authHeaders() }))
+        const state = await $api<VisitState>(visitsPath(code, userId))
+
+        this.apply(state)
       } catch (e: any) {
+        console.error('LOAD VISITS ERROR:', e)
         this.error = errMsg(e, 'Не удалось загрузить визиты')
       }
     },
 
-    async start(code: string, userId: number, targetUserId: number) {
+    async start(
+      code: string,
+      userId: number,
+      targetUserId: number
+    ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        this.apply(await $fetch<VisitState>(`${base(code, userId)}/start`, {
-          method: 'POST', headers: authHeaders(), body: { targetUserId }
-        }))
+        const state = await $api<VisitState>(
+          `${visitsPath(code, userId)}/start`,
+          {
+            method: 'POST',
+            body: {
+              targetUserId
+            }
+          }
+        )
+
+        this.apply(state)
+
         return true
       } catch (e: any) {
+        console.error('START VISIT ERROR:', e)
         this.error = errMsg(e, 'Не удалось отправиться в гости')
+
         await this.load(code, userId)
+
         return false
       }
     },
 
-    /** Чужая ферма: поле и скупщик. null — визита нет (закончился). */
     async loadView(code: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       try {
-        const v = await $fetch<VisitView>(`${base(code, userId)}/view`, { headers: authHeaders() })
-        this.view = v
-        this.offsetMs = v.serverNowMs - Date.now()
-        return v
-      } catch {
+        const view = await $api<VisitView>(
+          `${visitsPath(code, userId)}/view`
+        )
+
+        this.view = view
+        this.offsetMs = view.serverNowMs - Date.now()
+
+        return view
+      } catch (e: any) {
+        console.error('LOAD VISIT VIEW ERROR:', e)
         this.view = null
+
         return null
       }
     },
 
     async report(code: string, userId: number, visitId: number) {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        const r = await $fetch<VisitReport>(`${base(code, userId)}/${visitId}/report`, {
-          method: 'POST', headers: authHeaders()
-        })
-        this.apply(r.state)
-        this.lastReport = r
-        return r
+        const report = await $api<VisitReport>(
+          `${visitsPath(code, userId)}/${visitId}/report`,
+          {
+            method: 'POST'
+          }
+        )
+
+        this.apply(report.state)
+        this.lastReport = report
+
+        return report
       } catch (e: any) {
+        console.error('VISIT REPORT ERROR:', e)
         this.error = errMsg(e, 'Не удалось сообщить о скупщике')
+
         await this.load(code, userId)
+
         return null
       }
     },
 
     async leave(code: string, userId: number, visitId: number) {
+      const { $api } = useNuxtApp()
+
       try {
-        this.apply(await $fetch<VisitState>(`${base(code, userId)}/${visitId}/leave`, {
-          method: 'POST', headers: authHeaders()
-        }))
+        const state = await $api<VisitState>(
+          `${visitsPath(code, userId)}/${visitId}/leave`,
+          {
+            method: 'POST'
+          }
+        )
+
+        this.apply(state)
       } catch (e: any) {
+        console.error('LEAVE VISIT ERROR:', e)
         this.error = errMsg(e, 'Не удалось уйти')
+      } finally {
+        this.view = null
       }
-      this.view = null
     }
   }
 })

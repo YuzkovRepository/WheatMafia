@@ -8,36 +8,44 @@ export interface ProductIndexItem {
   factoryCode: string | null
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
-/**
- * Откуда продукт и на каком этапе исследуется (по всем странам).
- * Данные берутся с /api/v1/catalog/research-index; если эндпоинта нет — компоненты считают этап сами.
- */
 export const useProductIndexStore = defineStore('productIndex', {
   state: () => ({
     items: {} as Record<string, ProductIndexItem>,
     loaded: false,
     loading: false
   }),
+
   getters: {
-    of: (s) => (code?: string | null): ProductIndexItem | null => (code ? (s.items[code] ?? null) : null)
+    of: (state) => (code?: string | null): ProductIndexItem | null => {
+      return code ? state.items[code] ?? null : null
+    }
   },
+
   actions: {
     async load() {
-      if (this.loaded || this.loading) return
+      if (this.loaded || this.loading) {
+        return
+      }
+
+      const { $api } = useNuxtApp()
+
       this.loading = true
+
       try {
-        const list = await $fetch<ProductIndexItem[]>('/api/v1/catalog/research-index', { headers: authHeaders() })
-        const m: Record<string, ProductIndexItem> = {}
-        for (const it of list) m[it.outputCode] = it
-        this.items = m
+        const items = await $api<ProductIndexItem[]>(
+          '/v1/catalog/research-index'
+        )
+
+        const index: Record<string, ProductIndexItem> = {}
+
+        for (const item of items ?? []) {
+          index[item.outputCode] = item
+        }
+
+        this.items = index
         this.loaded = true
-      } catch {
-        /* нет эндпоинта — работаем на расчётных значениях */
+      } catch (e: any) {
+        console.error('LOAD PRODUCT INDEX ERROR:', e)
       } finally {
         this.loading = false
       }

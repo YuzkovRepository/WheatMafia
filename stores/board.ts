@@ -31,7 +31,6 @@ export interface PlacedObject {
   level?: number
   builtAt?: string
 
-  // производство (для BUILDING); null-поля сервер не присылает
   productionStartedAt?: string
   productionReadyAt?: string
   productionInput?: string
@@ -40,10 +39,8 @@ export interface PlacedObject {
   productionOutputQty?: number
   productionTime?: number
   recipeCode?: string
-  /** забастовка: здание не работает до этого времени */
   blockedUntil?: string
 
-  // очередь производства (ингредиенты уже списаны)
   queue?: QueuedJob[]
 }
 
@@ -54,16 +51,14 @@ export interface Board {
   nextObjectId: number
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
-}
-
 const errMsg = (e: any, fallback: string) =>
-  e?.data?.message || e?.data?.error || e?.message || fallback
+  e?.data?.message ||
+  e?.data?.error ||
+  e?.message ||
+  fallback
+
+const boardPath = (sessionCode: string, userId: number) =>
+  `/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}`
 
 export const useBoardStore = defineStore('board', {
   state: () => ({
@@ -74,23 +69,27 @@ export const useBoardStore = defineStore('board', {
 
   actions: {
     async loadMyBoard(sessionCode: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
+
       try {
-        this.board = await $fetch<Board>(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}`,
-          { headers: authHeaders() }
+        this.board = await $api<Board>(
+          boardPath(sessionCode, userId)
         )
+
         return { success: true }
       } catch (e: any) {
+        console.error('LOAD BOARD ERROR:', e)
         this.error = errMsg(e, 'Не удалось загрузить ферму')
+
         return { success: false }
       } finally {
         this.isLoading = false
       }
     },
 
-    /** Обновление состояния, пришедшего по STOMP (без HTTP-запроса). */
     applyBoardState(board: Board) {
       this.board = board
     },
@@ -99,19 +98,32 @@ export const useBoardStore = defineStore('board', {
       sessionCode: string,
       userId: number,
       payload: {
-        row: number; col: number; width: number; height: number
-        crop: string; growSeconds: number
+        row: number
+        col: number
+        width: number
+        height: number
+        crop: string
+        growSeconds: number
       }
     ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/plant`,
-          { method: 'POST', body: payload, headers: authHeaders() }
+        await $api(
+          `${boardPath(sessionCode, userId)}/plant`,
+          {
+            method: 'POST',
+            body: payload
+          }
         )
+
         return { success: true }
       } catch (e: any) {
+        console.error('PLANT ERROR:', e)
         this.error = errMsg(e, 'Не удалось посадить')
+
         return { success: false }
       }
     },
@@ -120,38 +132,62 @@ export const useBoardStore = defineStore('board', {
       sessionCode: string,
       userId: number,
       payload: {
-        row: number; col: number; width: number; height: number
-        building: string; level: number
+        row: number
+        col: number
+        width: number
+        height: number
+        building: string
+        level: number
       }
     ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/build`,
-          { method: 'POST', body: payload, headers: authHeaders() }
+        await $api(
+          `${boardPath(sessionCode, userId)}/build`,
+          {
+            method: 'POST',
+            body: payload
+          }
         )
+
         return { success: true }
       } catch (e: any) {
+        console.error('BUILD ERROR:', e)
         this.error = errMsg(e, 'Не удалось построить')
+
         return { success: false }
       }
     },
 
-    async harvest(sessionCode: string, userId: number, objectId: number) {
+    async harvest(
+      sessionCode: string,
+      userId: number,
+      objectId: number
+    ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/harvest/${objectId}`,
-          { method: 'POST', headers: authHeaders() }
+        await $api(
+          `${boardPath(sessionCode, userId)}/harvest/${objectId}`,
+          {
+            method: 'POST'
+          }
         )
+
         return { success: true }
       } catch (e: any) {
+        console.error('HARVEST ERROR:', e)
         this.error = errMsg(e, 'Не удалось собрать')
+
         return { success: false }
       }
     },
 
-    /** Перенос объекта (склада) на новое место: row/col — левый верхний угол. */
     async moveObject(
       sessionCode: string,
       userId: number,
@@ -159,107 +195,158 @@ export const useBoardStore = defineStore('board', {
       row: number,
       col: number
     ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/move/${objectId}`,
-          { method: 'POST', body: { row, col }, headers: authHeaders() }
+        await $api(
+          `${boardPath(sessionCode, userId)}/move/${objectId}`,
+          {
+            method: 'POST',
+            body: { row, col }
+          }
         )
+
         return { success: true }
       } catch (e: any) {
+        console.error('MOVE OBJECT ERROR:', e)
         this.error = errMsg(e, 'Не удалось переместить')
+
         return { success: false }
       }
     },
 
-    /** Убрать культуру с поля. */
-    async removeObject(sessionCode: string, userId: number, objectId: number) {
+    async removeObject(
+      sessionCode: string,
+      userId: number,
+      objectId: number
+    ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBase
+
       try {
-        await $fetch(
-          `${apiBase}/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/remove/${objectId}`,
-          { method: 'POST', headers: authHeaders() }
+        await $api(
+          `${boardPath(sessionCode, userId)}/remove/${objectId}`,
+          {
+            method: 'POST'
+          }
         )
+
         return { success: true }
       } catch (e: any) {
+        console.error('REMOVE OBJECT ERROR:', e)
         this.error = errMsg(e, 'Не удалось убрать')
+
         return { success: false }
       }
     },
 
-    /** Убрать продукт из очереди производства (ингредиенты возвращаются на склад). */
-    async cancelQueued(sessionCode: string, userId: number, objectId: number, index: number) {
+    async cancelQueued(
+      sessionCode: string,
+      userId: number,
+      objectId: number,
+      index: number
+    ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBase
+
       try {
-        await $fetch(
-          `${apiBase}/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/queue/${index}/cancel`,
-          { method: 'POST', headers: authHeaders() }
+        await $api(
+          `${boardPath(sessionCode, userId)}/produce/${objectId}/queue/${index}/cancel`,
+          {
+            method: 'POST'
+          }
         )
+
         return { success: true }
       } catch (e: any) {
+        console.error('CANCEL QUEUED ERROR:', e)
         this.error = errMsg(e, 'Не удалось убрать из очереди')
+
         return { success: false }
       }
     },
 
-    /** Запуск производства на заводе по рецепту (outputCode); если завод занят — продукт встаёт в очередь. */
     async startProduction(
       sessionCode: string,
       userId: number,
       objectId: number,
       outputCode: string
     ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBase
+
       try {
-        await $fetch(
-          `${apiBase}/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/start`,
-          { method: 'POST', body: { outputCode }, headers: authHeaders() }
+        await $api(
+          `${boardPath(sessionCode, userId)}/produce/${objectId}/start`,
+          {
+            method: 'POST',
+            body: { outputCode }
+          }
         )
+
         return { success: true }
       } catch (e: any) {
-        this.error = errMsg(e, 'Не удалось запустить производство')
+        console.error('START PRODUCTION ERROR:', e)
+        this.error = errMsg(
+          e,
+          'Не удалось запустить производство'
+        )
+
         return { success: false }
       }
     },
 
-    /** Забрать готовую продукцию в склад. */
-    async collectProduction(sessionCode: string, userId: number, objectId: number, index = -1) {
+    async collectProduction(
+      sessionCode: string,
+      userId: number,
+      objectId: number,
+      index = -1
+    ) {
+      const { $api } = useNuxtApp()
+
       this.error = null
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBase
+
       try {
-        await $fetch(
-          `${apiBase}/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/collect?index=${index}`,
-          { method: 'POST', headers: authHeaders() }
+        await $api(
+          `${boardPath(sessionCode, userId)}/produce/${objectId}/collect?index=${index}`,
+          {
+            method: 'POST'
+          }
         )
+
         return { success: true }
       } catch (e: any) {
-        this.error = errMsg(e, 'Не удалось забрать продукцию')
+        console.error('COLLECT PRODUCTION ERROR:', e)
+        this.error = errMsg(
+          e,
+          'Не удалось забрать продукцию'
+        )
+
         return { success: false }
       }
     }
   }
 })
 
-/** Ячейки производства здания (со старым одиночным производством тоже работает). */
-export function jobsOf(o: PlacedObject): QueuedJob[] {
-  const list = [...(o.queue ?? [])]
-  if (o.productionReadyAt && o.productionOutput) {
-    list.unshift({
-      recipeCode: o.recipeCode ?? '',
-      output: o.productionOutput,
-      outputQty: o.productionOutputQty,
-      time: o.productionTime ?? 0,
+export function jobsOf(object: PlacedObject): QueuedJob[] {
+  const jobs = [...(object.queue ?? [])]
+
+  if (object.productionReadyAt && object.productionOutput) {
+    jobs.unshift({
+      recipeCode: object.recipeCode ?? '',
+      output: object.productionOutput,
+      outputQty: object.productionOutputQty,
+      time: object.productionTime ?? 0,
       inputs: {},
-      startedAt: o.productionStartedAt,
-      readyAt: o.productionReadyAt
+      startedAt: object.productionStartedAt,
+      readyAt: object.productionReadyAt
     })
   }
-  return list
+
+  return jobs
 }

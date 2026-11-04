@@ -9,85 +9,130 @@ export interface Note {
 
 let flashTimer: ReturnType<typeof setTimeout> | null = null
 
-/**
- * Личные заметки игрока. Бэкенд не участвует: всё в localStorage (отдельно для партии и игрока).
- * Общий стор нужен, чтобы продукт можно было добавить двойным кликом из справочника и дерева исследований.
- */
 export const useNotesStore = defineStore('notes', {
   state: () => ({
     notes: [] as Note[],
     open: false,
     key: '',
     loaded: false,
-    /** короткое сообщение «добавлено в заметки» (показывает farm-page) */
     flash: ''
   }),
+
   getters: {
-    pending: (s) => s.notes.filter(n => !n.done).length
+    pending: (state): number =>
+      state.notes.filter(note => !note.done).length
   },
+
   actions: {
     init(key: string) {
-      if (this.loaded && this.key === key) return
+      if (this.loaded && this.key === key) {
+        return
+      }
+
       this.key = key
+
       try {
         const raw = localStorage.getItem(`farm-notes:${key}`)
         const parsed = raw ? JSON.parse(raw) : null
-        this.notes = Array.isArray(parsed?.notes) ? parsed.notes : []
-        this.open = !!parsed?.open
+
+        this.notes = Array.isArray(parsed?.notes)
+          ? parsed.notes
+          : []
+
+        this.open = Boolean(parsed?.open)
       } catch {
         this.notes = []
       }
+
       this.loaded = true
     },
+
     save() {
-      if (!this.loaded) return
+      if (!this.loaded) {
+        return
+      }
+
       try {
-        localStorage.setItem(`farm-notes:${this.key}`, JSON.stringify({ notes: this.notes, open: this.open }))
-      } catch { /* приватный режим — заметки просто не сохранятся */ }
+        localStorage.setItem(
+          `farm-notes:${this.key}`,
+          JSON.stringify({
+            notes: this.notes,
+            open: this.open
+          })
+        )
+      } catch {
+        // Приватный режим браузера: заметки не сохраняются.
+      }
     },
-    say(msg: string) {
-      this.flash = msg
-      if (flashTimer) clearTimeout(flashTimer)
-      flashTimer = setTimeout(() => { this.flash = '' }, 2200)
+
+    say(message: string) {
+      this.flash = message
+
+      if (flashTimer) {
+        clearTimeout(flashTimer)
+      }
+
+      flashTimer = setTimeout(() => {
+        this.flash = ''
+      }, 2200)
     },
+
     add(product: string, text: string) {
       this.notes.unshift({
-        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        id:
+          Date.now().toString(36) +
+          Math.random().toString(36).slice(2, 6),
         product,
         text: text.trim(),
         done: false
       })
+
       this.save()
     },
-    /** Двойной клик по продукту: добавить в заметки (если там уже есть невыполненная — не дублируем). */
+
     addProduct(code: string, title: string) {
       if (!this.loaded) {
         this.say('Заметки ещё не загрузились')
         return false
       }
-      if (this.notes.some(n => n.product === code && !n.done)) {
+
+      const exists = this.notes.some(
+        note => note.product === code && !note.done
+      )
+
+      if (exists) {
         this.say(`«${title}» уже в заметках`)
         return false
       }
+
       this.add(code, '')
       this.say(`📝 «${title}» добавлен в заметки`)
+
       return true
     },
+
     toggle(id: string) {
-      const n = this.notes.find(x => x.id === id)
-      if (n) n.done = !n.done
+      const note = this.notes.find(item => item.id === id)
+
+      if (note) {
+        note.done = !note.done
+      }
+
       this.save()
     },
+
     remove(id: string) {
-      this.notes = this.notes.filter(n => n.id !== id)
+      this.notes = this.notes.filter(note => note.id !== id)
       this.save()
     },
+
     clearDone() {
-      this.notes = this.notes.filter(n => !n.done)
+      this.notes = this.notes.filter(note => !note.done)
       this.save()
     },
-    setOpen(v: boolean) {
-      this.open = v
+
+    setOpen(value: boolean) {
+      this.open = value
       this.save()
     }
   }

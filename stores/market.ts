@@ -8,7 +8,7 @@ export interface Lot {
   productTitle: string
   productKind: 'CROP' | 'MATERIAL' | 'GOODS'
   quantity: number
-  price: number // за одну штуку
+  price: number
   description: string | null
   createdAt: string
 }
@@ -25,18 +25,6 @@ export interface SellBody {
   description: string | null
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
-}
-
-const base = (code: string, userId: number) =>
-  `/api/v1/market/by-session/${code.toUpperCase()}/user/${userId}`
-
-// сообщения сервера -> понятный текст
 const RU: Array<[string, string]> = [
   ['Not enough coins', 'Не хватает монет'],
   ['Storage full', 'Склад переполнен'],
@@ -49,11 +37,16 @@ const RU: Array<[string, string]> = [
   ['Invalid price', 'Некорректная цена'],
   ['Product not found', 'Продукт не найден']
 ]
+
 const humanize = (e: any, fallback: string): string => {
   const raw: string = e?.data?.message || e?.message || ''
-  const hit = RU.find(([k]) => raw.includes(k))
-  return hit ? hit[1] : raw || fallback
+  const translation = RU.find(([english]) => raw.includes(english))
+
+  return translation ? translation[1] : raw || fallback
 }
+
+const marketPath = (code: string, userId: number) =>
+  `/v1/market/by-session/${code.toUpperCase()}/user/${userId}`
 
 export const useMarketStore = defineStore('market', {
   state: () => ({
@@ -64,46 +57,81 @@ export const useMarketStore = defineStore('market', {
   }),
 
   actions: {
-    apply(o: Overview) {
-      this.lots = o?.lots ?? []
-      this.coins = Number(o?.coins ?? 0)
+    apply(overview: Overview) {
+      this.lots = overview?.lots ?? []
+      this.coins = Number(overview?.coins ?? 0)
     },
 
     async load(code: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
+
       try {
-        const o = await $fetch<Overview>(base(code, userId), { headers: authHeaders() })
-        this.apply(o)
+        const overview = await $api<Overview>(
+          marketPath(code, userId)
+        )
+
+        this.apply(overview)
       } catch (e: any) {
+        console.error('LOAD MARKET ERROR:', e)
         this.error = humanize(e, 'Не удалось загрузить рынок')
       } finally {
         this.isLoading = false
       }
     },
 
-    async post(code: string, userId: number, path: string, body?: unknown): Promise<boolean> {
+    async post(
+      code: string,
+      userId: number,
+      path: string,
+      body?: unknown
+    ): Promise<boolean> {
+      const { $api } = useNuxtApp()
+
       this.error = null
+
       try {
-        const o = await $fetch<Overview>(`${base(code, userId)}${path}`, {
-          method: 'POST',
-          headers: authHeaders(),
-          body: body as any
-        })
-        this.apply(o)
+        const overview = await $api<Overview>(
+          `${marketPath(code, userId)}${path}`,
+          {
+            method: 'POST',
+            body: body as any
+          }
+        )
+
+        this.apply(overview)
+
         return true
       } catch (e: any) {
+        console.error('MARKET OPERATION ERROR:', e)
         this.error = humanize(e, 'Операция не удалась')
+
         return false
       }
     },
 
-    sell(code: string, userId: number, body: SellBody) {
+    sell(
+      code: string,
+      userId: number,
+      body: SellBody
+    ) {
       return this.post(code, userId, '/sell', body)
     },
-    buy(code: string, userId: number, slotId: number) {
+
+    buy(
+      code: string,
+      userId: number,
+      slotId: number
+    ) {
       return this.post(code, userId, `/buy/${slotId}`)
     },
-    cancel(code: string, userId: number, slotId: number) {
+
+    cancel(
+      code: string,
+      userId: number,
+      slotId: number
+    ) {
       return this.post(code, userId, `/cancel/${slotId}`)
     }
   }

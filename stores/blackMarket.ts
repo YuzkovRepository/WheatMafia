@@ -55,27 +55,26 @@ interface SellResult {
   state: BmState
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
-}
-
 const errMsg = (e: any, fallback: string) =>
-  e?.data?.message || e?.data?.error || e?.message || fallback
+  e?.data?.message ||
+  e?.data?.error ||
+  e?.message ||
+  fallback
+
+const blackMarketPath = (sessionCode: string, userId: number) =>
+  `/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}`
 
 export const useBlackMarketStore = defineStore('blackMarket', {
   state: () => ({
     current: null as BmState | null,
-    /** активные визиты всех игроков партии (приходит и по STOMP) */
     active: [] as BmPublicVisit[],
-    /** разница серверных и локальных часов, мс */
     offsetMs: 0,
     isLoading: false,
     error: null as string | null,
-    lastSale: null as { earned: number; units: number } | null
+    lastSale: null as {
+      earned: number
+      units: number
+    } | null
   }),
 
   actions: {
@@ -86,76 +85,116 @@ export const useBlackMarketStore = defineStore('blackMarket', {
     },
 
     async load(sessionCode: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBase
+
       try {
-        this.apply(await $fetch<BmState>(
-          `${apiBase}/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}`,
-          { headers: authHeaders() }
-        ))
+        const state = await $api<BmState>(
+          blackMarketPath(sessionCode, userId)
+        )
+
+        this.apply(state)
       } catch (e: any) {
-        this.error = errMsg(e, 'Не удалось загрузить данные скупщика')
+        console.error('LOAD BLACK MARKET ERROR:', e)
+        this.error = errMsg(
+          e,
+          'Не удалось загрузить данные скупщика'
+        )
       } finally {
         this.isLoading = false
       }
     },
 
     async summon(sessionCode: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       this.error = null
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBaseconst
+
       try {
-        this.apply(await $fetch<BmState>(
-          `${apiBase}/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/summon`,
-          { method: 'POST', headers: authHeaders() }
-        ))
+        const state = await $api<BmState>(
+          `${blackMarketPath(sessionCode, userId)}/summon`,
+          {
+            method: 'POST'
+          }
+        )
+
+        this.apply(state)
+
         return true
       } catch (e: any) {
+        console.error('SUMMON BLACK MARKET ERROR:', e)
         this.error = errMsg(e, 'Скупщик не приехал')
+
         return false
       }
     },
 
     async dismiss(sessionCode: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       this.error = null
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBaseconst
+
       try {
-        this.apply(await $fetch<BmState>(
-          `${apiBase}/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/dismiss`,
-          { method: 'POST', headers: authHeaders() }
-        ))
+        const state = await $api<BmState>(
+          `${blackMarketPath(sessionCode, userId)}/dismiss`,
+          {
+            method: 'POST'
+          }
+        )
+
+        this.apply(state)
       } catch (e: any) {
-        this.error = errMsg(e, 'Не удалось отпустить скупщика')
+        console.error('DISMISS BLACK MARKET ERROR:', e)
+        this.error = errMsg(
+          e,
+          'Не удалось отпустить скупщика'
+        )
       }
     },
 
-    /** productCode = null — продать весь нелегал. Возвращает заработок или null при ошибке. */
-    async sell(sessionCode: string, userId: number, productCode: string | null, quantity: number | null) {
+    async sell(
+      sessionCode: string,
+      userId: number,
+      productCode: string | null,
+      quantity: number | null
+    ) {
+      const { $api } = useNuxtApp()
+      const marketStore = useMarketStore()
+
       this.error = null
 
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBase
       try {
-        const res = await $fetch<SellResult>(
-          `${apiBase}/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/sell`,
-          { method: 'POST', headers: authHeaders(), body: { productCode, quantity } }
+        const result = await $api<SellResult>(
+          `${blackMarketPath(sessionCode, userId)}/sell`,
+          {
+            method: 'POST',
+            body: {
+              productCode,
+              quantity
+            }
+          }
         )
-        this.apply(res.state)
-        // баланс общий с маркетплейсом и обычным скупщиком
-        useMarketStore().coins = Number(res.coins)
-        this.lastSale = { earned: Number(res.earned), units: Number(res.units) }
-        return Number(res.earned)
+
+        this.apply(result.state)
+        marketStore.coins = Number(result.coins)
+
+        this.lastSale = {
+          earned: Number(result.earned),
+          units: Number(result.units)
+        }
+
+        return Number(result.earned)
       } catch (e: any) {
+        console.error('BLACK MARKET SELL ERROR:', e)
         this.error = errMsg(e, 'Не удалось продать')
+
         return null
       }
     },
 
-    /** Событие из STOMP (/topic/blackmarket.{code}): кто-то вызвал или отпустил скупщика. */
-    applyEvent(ev: BmEvent) {
-      this.active = ev.active ?? []
+    applyEvent(event: BmEvent) {
+      this.active = event.active ?? []
     }
   }
 })

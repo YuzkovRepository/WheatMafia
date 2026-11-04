@@ -43,16 +43,14 @@ export interface ResearchTree {
   storage: Record<string, number>
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
-}
-
 const errMsg = (e: any, fallback: string) =>
-  e?.data?.message || e?.data?.error || e?.message || fallback
+  e?.data?.message ||
+  e?.data?.error ||
+  e?.message ||
+  fallback
+
+const researchPath = (sessionCode: string, userId: number) =>
+  `/v1/research/by-session/${sessionCode.toUpperCase()}/user/${userId}`
 
 export const useResearchStore = defineStore('research', {
   state: () => ({
@@ -62,69 +60,109 @@ export const useResearchStore = defineStore('research', {
   }),
 
   getters: {
-    region: (s): string => s.tree?.region ?? '',
+    region: (state): string => state.tree?.region ?? '',
 
-    byStage: (s): Map<number, ResearchNode[]> => {
-      const m = new Map<number, ResearchNode[]>()
-      for (const n of s.tree?.nodes ?? []) {
-        const arr = m.get(n.stage) ?? []
-        arr.push(n)
-        m.set(n.stage, arr)
+    byStage: (state): Map<number, ResearchNode[]> => {
+      const grouped = new Map<number, ResearchNode[]>()
+
+      for (const node of state.tree?.nodes ?? []) {
+        const nodes = grouped.get(node.stage) ?? []
+        nodes.push(node)
+        grouped.set(node.stage, nodes)
       }
-      return m
+
+      return grouped
     },
 
-    canAfford: (s) => (node: ResearchNode): boolean => {
-      const storage = s.tree?.storage ?? {}
-      return node.cost.every(c => (storage[c.code] ?? 0) >= c.qty)
+    canAfford: (state) => (node: ResearchNode): boolean => {
+      const storage = state.tree?.storage ?? {}
+
+      return node.cost.every(
+        cost => (storage[cost.code] ?? 0) >= cost.qty
+      )
     },
 
-    missingFor: (s) => (node: ResearchNode): ResearchCost[] => {
-      const storage = s.tree?.storage ?? {}
+    missingFor: (state) => (node: ResearchNode): ResearchCost[] => {
+      const storage = state.tree?.storage ?? {}
+
       return node.cost
-        .map(c => ({ code: c.code, title: c.title, qty: Math.max(0, c.qty - (storage[c.code] ?? 0)) }))
-        .filter(c => c.qty > 0)
+        .map(cost => ({
+          code: cost.code,
+          title: cost.title,
+          qty: Math.max(
+            0,
+            cost.qty - (storage[cost.code] ?? 0)
+          )
+        }))
+        .filter(cost => cost.qty > 0)
     },
 
     readyToOpen(): ResearchNode[] {
       return (this.tree?.nodes ?? []).filter(
-        n => n.available && !n.unlocked && this.canAfford(n)
+        node =>
+          node.available &&
+          !node.unlocked &&
+          this.canAfford(node)
       )
     },
 
-    // какие research-коды открыты (для фильтра зданий)
     unlockedCodes(): Set<string> {
-      return new Set((this.tree?.nodes ?? []).filter(n => n.unlocked).map(n => n.code))
+      return new Set(
+        (this.tree?.nodes ?? [])
+          .filter(node => node.unlocked)
+          .map(node => node.code)
+      )
     }
   },
 
   actions: {
     async load(sessionCode: string, userId: number) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
+
       try {
-        this.tree = await $fetch<ResearchTree>(
-          `/api/v1/research/by-session/${sessionCode.toUpperCase()}/user/${userId}`,
-          { headers: authHeaders() }
+        this.tree = await $api<ResearchTree>(
+          researchPath(sessionCode, userId)
         )
       } catch (e: any) {
-        this.error = errMsg(e, 'Не удалось загрузить дерево исследований')
+        console.error('LOAD RESEARCH ERROR:', e)
+        this.error = errMsg(
+          e,
+          'Не удалось загрузить дерево исследований'
+        )
       } finally {
         this.isLoading = false
       }
     },
 
-    async open(sessionCode: string, userId: number, researchCode: string) {
+    async open(
+      sessionCode: string,
+      userId: number,
+      researchCode: string
+    ) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
+
       try {
-        this.tree = await $fetch<ResearchTree>(
-          `/api/v1/research/by-session/${sessionCode.toUpperCase()}/user/${userId}/open/${researchCode}`,
-          { method: 'POST', headers: authHeaders() }
+        this.tree = await $api<ResearchTree>(
+          `${researchPath(sessionCode, userId)}/open/${researchCode}`,
+          {
+            method: 'POST'
+          }
         )
+
         return { success: true }
       } catch (e: any) {
-        this.error = errMsg(e, 'Не удалось открыть исследование')
+        console.error('OPEN RESEARCH ERROR:', e)
+        this.error = errMsg(
+          e,
+          'Не удалось открыть исследование'
+        )
+
         return { success: false }
       } finally {
         this.isLoading = false

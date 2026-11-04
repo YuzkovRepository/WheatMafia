@@ -17,7 +17,11 @@ export interface RecipeItem {
   outputTitle: string
   outputQty: number
   productionTime: number
-  inputs: { code: string; title: string; qty: number }[]
+  inputs: {
+    code: string
+    title: string
+    qty: number
+  }[]
 }
 
 export interface ProductItem {
@@ -37,12 +41,10 @@ interface CatalogState {
   error: string | null
 }
 
-const authHeaders = () => {
-  const token = process.client ? localStorage.getItem('token') : null
-  return {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
-  }
+interface CatalogResponse {
+  factories: FactoryItem[]
+  products: ProductItem[]
+  recipes: RecipeItem[]
 }
 
 export const useCatalogStore = defineStore('catalog', {
@@ -55,67 +57,130 @@ export const useCatalogStore = defineStore('catalog', {
   }),
 
   getters: {
-    byCode: (s) => (code?: string | null): FactoryItem | null =>
-      code ? s.factories.find(f => f.code === code) ?? null : null,
+    byCode: (state) => (code?: string | null): FactoryItem | null => {
+      return code
+        ? state.factories.find(
+            factory => factory.code === code
+          ) ?? null
+        : null
+    },
 
-    productByCode: (s) => (code?: string | null): ProductItem | null =>
-      code ? s.products.find(p => p.code === code) ?? null : null,
+    productByCode: (state) => (code?: string | null): ProductItem | null => {
+      return code
+        ? state.products.find(
+            product => product.code === code
+          ) ?? null
+        : null
+    },
 
-    /** Здания для меню строительства: без склада/торговца, отфильтрованы по исследованиям */
     buildingsForUi(): FactoryItem[] {
       return this.factories.filter(
-        f => f.kind === 'BUILDING' && f.code !== 'warehouse' && f.code !== 'trader'
+        factory =>
+          factory.kind === 'BUILDING' &&
+          factory.code !== 'warehouse' &&
+          factory.code !== 'trader'
       )
     },
 
-    /** Доступные здания с учётом исследованного набора */
-    buildingsAvailableFor(): (unlocked: Set<string>, region?: string | null) => FactoryItem[] {
+    buildingsAvailableFor():
+      (unlocked: Set<string>, region?: string | null) => FactoryItem[] {
       return (unlocked, region) =>
-        this.factories.filter(f => {
-          if (f.kind !== 'BUILDING') return false
-          if (f.code === 'warehouse' || f.code === 'trader') return false
-          if (f.region && region && f.region !== region) return false
-          if (!f.requiredResearch) return true
-          return unlocked.has(f.requiredResearch)
+        this.factories.filter(factory => {
+          if (factory.kind !== 'BUILDING') {
+            return false
+          }
+
+          if (
+            factory.code === 'warehouse' ||
+            factory.code === 'trader'
+          ) {
+            return false
+          }
+
+          if (
+            factory.region &&
+            region &&
+            factory.region !== region
+          ) {
+            return false
+          }
+
+          if (!factory.requiredResearch) {
+            return true
+          }
+
+          return unlocked.has(factory.requiredResearch)
         })
     },
 
-    cropsForRegion(): (region?: string | null) => FactoryItem[] {
-      return (region) =>
-        this.factories.filter(f => {
-          if (f.kind !== 'CROP') return false
-          if (f.region && region && f.region !== region) return false
-          if (f.region && !region) return false
+    cropsForRegion():
+      (region?: string | null) => FactoryItem[] {
+      return region =>
+        this.factories.filter(factory => {
+          if (factory.kind !== 'CROP') {
+            return false
+          }
+
+          if (
+            factory.region &&
+            region &&
+            factory.region !== region
+          ) {
+            return false
+          }
+
+          if (factory.region && !region) {
+            return false
+          }
+
           return true
         })
     },
 
-    recipesFor: (s) => (factoryCode?: string | null): RecipeItem[] =>
-      factoryCode ? s.recipes.filter(r => r.factoryCode === factoryCode) : [],
+    recipesFor: (state) => (
+      factoryCode?: string | null
+    ): RecipeItem[] => {
+      return factoryCode
+        ? state.recipes.filter(
+            recipe => recipe.factoryCode === factoryCode
+          )
+        : []
+    },
 
-    /** Время роста культуры по коду */
-    growSecondsFor: (s) => (cropCode: string): number => {
-      const r = s.recipes.find(x => x.factoryCode === cropCode && x.outputCode === cropCode)
-      return r?.productionTime ?? 60
+    growSecondsFor: (state) => (cropCode: string): number => {
+      const recipe = state.recipes.find(
+        item =>
+          item.factoryCode === cropCode &&
+          item.outputCode === cropCode
+      )
+
+      return recipe?.productionTime ?? 60
     }
   },
 
   actions: {
     async load() {
-      if (this.factories.length && this.products.length) return
+      if (this.factories.length && this.products.length) {
+        return
+      }
+
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
+
       try {
-        const data = await $fetch<{
-          factories: FactoryItem[]
-          products: ProductItem[]
-          recipes: RecipeItem[]
-        }>('/api/v1/catalog', { headers: authHeaders() })
+        const data = await $api<CatalogResponse>('/v1/catalog')
+
         this.factories = data.factories ?? []
         this.products = data.products ?? []
         this.recipes = data.recipes ?? []
       } catch (e: any) {
-        this.error = e?.data?.message || e?.message || 'Не удалось загрузить каталог'
+        console.error('LOAD CATALOG ERROR:', e)
+        this.error =
+          e?.data?.message ||
+          e?.message ||
+          'Не удалось загрузить каталог'
       } finally {
         this.isLoading = false
       }

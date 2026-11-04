@@ -26,7 +26,6 @@ export interface PlayerDTO {
   isReady: boolean
 }
 
-// экспортируем — используется в STOMP-обработчике лобби
 export interface ConnectResponse {
   quantity_players: number
   sessionCode: string
@@ -55,31 +54,43 @@ export const useSessionStore = defineStore('session', {
 
     async connect(
       userId: number,
-      payload: { sessionCode: string | null; roundDurationSeconds?: number; score_max?: number }
+      payload: {
+        sessionCode: string | null
+        roundDurationSeconds?: number
+        score_max?: number
+      }
     ) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
 
-      const token = process.client ? localStorage.getItem('token') : null
-
       try {
-        const data = await $fetch<ConnectResponse>(`/api/v1/sessions/connect/${userId}`, {
-          method: 'POST',
-          body: {
-            sessionCode: payload.sessionCode,
-            roundDurationSeconds: payload.roundDurationSeconds ?? null,
-            score_max: payload.score_max ?? null
-          },
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {})
+        const data = await $api<ConnectResponse>(
+          `/v1/sessions/connect/${userId}`,
+          {
+            method: 'POST',
+            body: {
+              sessionCode: payload.sessionCode,
+              roundDurationSeconds: payload.roundDurationSeconds ?? null,
+              score_max: payload.score_max ?? null
+            }
           }
-        })
+        )
 
         this.applyResponse(data)
-        return { success: true, code: data.sessionCode }
+
+        return {
+          success: true,
+          code: data.sessionCode
+        }
       } catch (e: any) {
-        this.error = e?.data?.message || e?.message || 'Не удалось подключиться к комнате'
+        console.error('CONNECT SESSION ERROR:', e)
+        this.error =
+          e?.data?.message ||
+          e?.message ||
+          'Не удалось подключиться к комнате'
+
         return { success: false }
       } finally {
         this.isLoading = false
@@ -87,51 +98,58 @@ export const useSessionStore = defineStore('session', {
     },
 
     async setReady(userId: number, code: string, ready: boolean) {
-      const token = process.client ? localStorage.getItem('token') : null
+      const { $api } = useNuxtApp()
+
       try {
-        const data = await $fetch<ConnectResponse>(
-          `/api/v1/sessions/${code.toUpperCase()}/ready/${userId}?ready=${ready}`,
+        const data = await $api<ConnectResponse>(
+          `/v1/sessions/${code.toUpperCase()}/ready/${userId}?ready=${ready}`,
           {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(token ? { Authorization: `Bearer ${token}` } : {})
-            }
+            method: 'POST'
           }
         )
+
         this.applyResponse(data)
+
         return { success: true }
       } catch (e: any) {
-        this.error = e?.data?.message || e?.message || 'Не удалось изменить готовность'
+        console.error('SET READY ERROR:', e)
+        this.error =
+          e?.data?.message ||
+          e?.message ||
+          'Не удалось изменить готовность'
+
         return { success: false }
       }
     },
 
     async startGame(userId: number, code: string) {
-      const token = process.client ? localStorage.getItem('token') : null
+      const { $api } = useNuxtApp()
+
       try {
-        const data = await $fetch<ConnectResponse>(
-          `/api/v1/sessions/${code.toUpperCase()}/start/${userId}`,
+        const data = await $api<ConnectResponse>(
+          `/v1/sessions/${code.toUpperCase()}/start/${userId}`,
           {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(token ? { Authorization: `Bearer ${token}` } : {})
-            }
+            method: 'POST'
           }
         )
+
         this.applyResponse(data)
-        return { success: true, status: data.status }
+
+        return {
+          success: true,
+          status: data.status
+        }
       } catch (e: any) {
-        this.error = e?.data?.message || e?.message || 'Не удалось начать игру'
+        console.error('START GAME ERROR:', e)
+        this.error =
+          e?.data?.message ||
+          e?.message ||
+          'Не удалось начать игру'
+
         return { success: false }
       }
     },
 
-    /**
-     * Применяет состояние лобби, пришедшее по STOMP (RabbitMQ).
-     * Никаких HTTP-запросов — только мутация стора.
-     */
     applyLobbyState(data: ConnectResponse) {
       this.applyResponse(data)
     },
@@ -144,12 +162,12 @@ export const useSessionStore = defineStore('session', {
         maxPlayers: 6,
         scoreMax: data.score_max,
         roundDurationSeconds: data.roundDurationSeconds,
-        players: (data.players ?? []).map(p => ({
-          userId: p.userId,
-          userSessionId: p.userSessionId,
-          nickName: p.nickName,
-          isHost: p.isHost,
-          isReady: p.isReady === true
+        players: (data.players ?? []).map(player => ({
+          userId: player.userId,
+          userSessionId: player.userSessionId,
+          nickName: player.nickName,
+          isHost: player.isHost,
+          isReady: player.isReady === true
         }))
       }
     },
