@@ -55,6 +55,9 @@ export const useAuthStore = defineStore('auth', {
       this.isLoading = true
       this.error = null
 
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBase
+
       try {
         const response = await $fetch<{ status: number; message: string; data: LoginResponse }>(
           `${apiBase}/v1/users/login`,
