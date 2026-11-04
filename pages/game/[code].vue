@@ -1579,66 +1579,110 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 let client: Client | null = null
 
-onMounted(() => {
+onMounted(async () => {
   const userId = authStore.user?.id
-  if (!userId) return
 
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  if (!userId) {
+    return
+  }
+
+  // Поле и каталог должны грузиться независимо от WebSocket.
+  await Promise.all([
+    boardStore.loadMyBoard(code.value, userId),
+    catalogStore.load(),
+    researchStore.load(code.value, userId)
+  ])
+
   client = new Client({
-    brokerURL: `${proto}://${location.host}/ws`,
+    brokerURL: config.public.wsBase,
     reconnectDelay: 3000,
-    onConnect: async () => {
-      client!.subscribe(`/topic/board.${code.value}.${userId}`, (msg) => {
-        boardStore.applyBoardState(JSON.parse(msg.body) as Board)
-        // склад мог измениться (сбор урожая/производство) — обновим дерево, если модалка открыта
-        if (researchOpen.value) researchStore.load(code.value, userId)
-      })
-      // маркетплейс: баланс/журнал + обновление при любой сделке игроков в партии
-      marketStore.load(code.value, userId)
-      client!.subscribe(`/topic/market.${code.value}`, () => {
-        marketStore.load(code.value, userId)
-        loadStorage()
-      })
-      // контракты и суперзаказы: обновляем списки, склад и баланс при любом изменении в партии
-      dealsStore.load(code.value, userId)
-      client!.subscribe(`/topic/deals.${code.value}`, () => {
-        dealsStore.load(code.value, userId)
-        loadStorage()
-      })
-      // депутат: прогресс всех игроков и победитель
-      deputyStore.load(code.value)
-      client!.subscribe(`/topic/deputy.${code.value}`, (msg) => {
-        onDeputyEvent(JSON.parse(msg.body) as DeputyEvent)
-      })
-      // личные сообщения: по STOMP приходит только сигнал без текста
-      client!.subscribe(`/topic/chat.${code.value}.${userId}`, (msg) => {
-        const sig = JSON.parse(msg.body) as { fromId: number }
-        chatStore.onSignal(code.value, userId, sig.fromId, chatVisible.value)
-        if (!chatVisible.value) showToast('💬 Новое личное сообщение')
-      })
-      // визиты на чужие фермы: лимит и новости о разоблачениях
-      visitsStore.load(code.value, userId)
-      client!.subscribe(`/topic/visits.${code.value}`, (msg) => {
-        onVisitEvent(JSON.parse(msg.body) as VisitEvent)
-      })
-      // теневой скупщик: свой визит и чужие активные скупщики
-      blackStore.load(code.value, userId)
-      client!.subscribe(`/topic/blackmarket.${code.value}`, (msg) => {
-        onBlackEvent(JSON.parse(msg.body) as BmEvent)
-      })
-      // совет семей: при открытии/закрытии раунда сервер шлёт «changed»
-      client!.subscribe(`/topic/council.${code.value}`, () => {
-        councilStore.load(code.value, userId)
-      })
-      if (!boardStore.board) {
-        await boardStore.loadMyBoard(code.value, userId)
-      }
-      // дерево исследований: загрузить при старте, чтобы бейдж «готово к исследованию» был актуален
-      await researchStore.load(code.value, userId)
+
+    onConnect: () => {
+      client?.subscribe(
+        `/topic/board.${code.value}.${userId}`,
+        message => {
+          boardStore.applyBoardState(
+            JSON.parse(message.body) as Board
+          )
+        }
+      )
+
+      client?.subscribe(
+        `/topic/market.${code.value}`,
+        () => {
+          marketStore.load(code.value, userId)
+          loadStorage()
+        }
+      )
+
+      client?.subscribe(
+        `/topic/deals.${code.value}`,
+        () => {
+          dealsStore.load(code.value, userId)
+          loadStorage()
+        }
+      )
+
+      client?.subscribe(
+        `/topic/deputy.${code.value}`,
+        message => {
+          onDeputyEvent(
+            JSON.parse(message.body) as DeputyEvent
+          )
+        }
+      )
+
+      client?.subscribe(
+        `/topic/chat.${code.value}.${userId}`,
+        message => {
+          const signal = JSON.parse(message.body) as {
+            fromId: number
+          }
+
+          chatStore.onSignal(
+            code.value,
+            userId,
+            signal.fromId,
+            chatVisible.value
+          )
+
+          if (!chatVisible.value) {
+            showToast('Новое сообщение')
+            visitsStore.load(code.value, userId)
+          }
+        }
+      )
+
+      client?.subscribe(
+        `/topic/visits.${code.value}`,
+        message => {
+          onVisitEvent(
+            JSON.parse(message.body) as VisitEvent
+          )
+        }
+      )
+
+      client?.subscribe(
+        `/topic/blackmarket.${code.value}`,
+        message => {
+          onBlackEvent(
+            JSON.parse(message.body) as BmEvent
+          )
+        }
+      )
+
+      client?.subscribe(
+        `/topic/council.${code.value}`,
+        () => {
+          councilStore.load(code.value, userId)
+        }
+      )
     }
   })
+
   client.activate()
 })
+
 
 onUnmounted(() => {
   client?.deactivate()
