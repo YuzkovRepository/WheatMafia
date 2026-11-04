@@ -1,4 +1,6 @@
 import { defineStore } from 'pinia'
+const config = useRuntimeConfig()
+const apiBase = config.public.apiBase
 
 interface User {
   id?: number
@@ -96,7 +98,7 @@ export const useAuthStore = defineStore('auth', {
 
       try {
         const response = await $fetch<{ status: number; message: string; data: RegisterResponse }>(
-          '/api/v1/users/register',
+          `${apiBase}/v1/users/login`,
           {
             method: 'POST',
             body: {
