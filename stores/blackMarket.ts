@@ -87,9 +87,11 @@ export const useBlackMarketStore = defineStore('blackMarket', {
 
     async load(sessionCode: string, userId: number) {
       this.isLoading = true
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBase
       try {
         this.apply(await $fetch<BmState>(
-          `/api/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}`,
+          `${apiBase}/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}`,
           { headers: authHeaders() }
         ))
       } catch (e: any) {
@@ -101,9 +103,11 @@ export const useBlackMarketStore = defineStore('blackMarket', {
 
     async summon(sessionCode: string, userId: number) {
       this.error = null
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBaseconst
       try {
         this.apply(await $fetch<BmState>(
-          `/api/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/summon`,
+          `${apiBase}/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/summon`,
           { method: 'POST', headers: authHeaders() }
         ))
         return true
@@ -115,9 +119,11 @@ export const useBlackMarketStore = defineStore('blackMarket', {
 
     async dismiss(sessionCode: string, userId: number) {
       this.error = null
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBaseconst
       try {
         this.apply(await $fetch<BmState>(
-          `/api/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/dismiss`,
+          `${apiBase}/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/dismiss`,
           { method: 'POST', headers: authHeaders() }
         ))
       } catch (e: any) {
@@ -128,9 +134,12 @@ export const useBlackMarketStore = defineStore('blackMarket', {
     /** productCode = null — продать весь нелегал. Возвращает заработок или null при ошибке. */
     async sell(sessionCode: string, userId: number, productCode: string | null, quantity: number | null) {
       this.error = null
+
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBase
       try {
         const res = await $fetch<SellResult>(
-          `/api/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/sell`,
+          `${apiBase}/v1/blackmarket/by-session/${sessionCode.toUpperCase()}/user/${userId}/sell`,
           { method: 'POST', headers: authHeaders(), body: { productCode, quantity } }
         )
         this.apply(res.state)

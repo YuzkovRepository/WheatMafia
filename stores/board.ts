@@ -175,9 +175,11 @@ export const useBoardStore = defineStore('board', {
     /** Убрать культуру с поля. */
     async removeObject(sessionCode: string, userId: number, objectId: number) {
       this.error = null
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBase
       try {
         await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/remove/${objectId}`,
+          `${apiBase}/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/remove/${objectId}`,
           { method: 'POST', headers: authHeaders() }
         )
         return { success: true }
@@ -190,9 +192,11 @@ export const useBoardStore = defineStore('board', {
     /** Убрать продукт из очереди производства (ингредиенты возвращаются на склад). */
     async cancelQueued(sessionCode: string, userId: number, objectId: number, index: number) {
       this.error = null
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBase
       try {
         await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/queue/${index}/cancel`,
+          `${apiBase}/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/queue/${index}/cancel`,
           { method: 'POST', headers: authHeaders() }
         )
         return { success: true }
@@ -210,9 +214,11 @@ export const useBoardStore = defineStore('board', {
       outputCode: string
     ) {
       this.error = null
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBase
       try {
         await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/start`,
+          `${apiBase}/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/start`,
           { method: 'POST', body: { outputCode }, headers: authHeaders() }
         )
         return { success: true }
@@ -225,9 +231,11 @@ export const useBoardStore = defineStore('board', {
     /** Забрать готовую продукцию в склад. */
     async collectProduction(sessionCode: string, userId: number, objectId: number, index = -1) {
       this.error = null
+      const config = useRuntimeConfig()
+      const apiBase = config.public.apiBase
       try {
         await $fetch(
-          `/api/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/collect?index=${index}`,
+          `${apiBase}/v1/boards/by-session/${sessionCode.toUpperCase()}/user/${userId}/produce/${objectId}/collect?index=${index}`,
           { method: 'POST', headers: authHeaders() }
         )
         return { success: true }

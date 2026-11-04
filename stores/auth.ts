@@ -1,21 +1,21 @@
 import { defineStore } from 'pinia'
 
-interface User {
+export interface User {
   id?: number
-  login: string      // на бэкенде это nickName; на фронте оставим как есть
+  login: string
   email: string
   nickName?: string
   createdAt?: string
 }
 
-interface LoginResponse {
+export interface LoginResponse {
   token: string
   id: number
   email: string
   nickName: string
 }
 
-interface RegisterResponse {
+export interface RegisterResponse {
   email: string
 }
 
@@ -30,7 +30,7 @@ export const useAuthStore = defineStore('auth', {
 
   actions: {
     async initAuth() {
-      if (!process.client) return
+      if (!import.meta.client) return
 
       const token = localStorage.getItem('token')
       const userStr = localStorage.getItem('user')
@@ -50,42 +50,47 @@ export const useAuthStore = defineStore('auth', {
     },
 
     async login(form: { email: string; password: string }) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
 
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBase
-
       try {
-        const response = await $fetch<{ status: number; message: string; data: LoginResponse }>(
-          `${apiBase}/v1/users/login`,
-          {
-            method: 'POST',
-            body: {
-              email: form.email,        // ← было loginOrEmail
-              password: form.password
-            },
-            headers: { 'Content-Type': 'application/json' }
+        const response = await $api<{
+          status: number
+          message: string
+          data: LoginResponse
+        }>('/v1/users/login', {
+          method: 'POST',
+          body: {
+            email: form.email,
+            password: form.password
           }
-        )
+        })
 
         const data = response?.data
-        if (!data?.token) throw new Error('Неверный ответ от сервера')
+
+        if (!data?.token) {
+          throw new Error('Неверный ответ от сервера')
+        }
 
         localStorage.setItem('token', data.token)
         this.token = data.token
 
         const user: User = {
           id: data.id,
-          login: data.nickName,   // на бэкенде login = nickName
+          login: data.nickName,
           email: data.email,
           nickName: data.nickName
         }
+
         localStorage.setItem('user', JSON.stringify(user))
         this.user = user
         this.isAuthenticated = true
+
         return { success: true }
       } catch (e: any) {
+        console.error('LOGIN ERROR:', e)
         this.error = e?.data?.message || e?.message || 'Ошибка входа'
         return { success: false }
       } finally {
@@ -93,32 +98,40 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
-    async register(form: { email: string; nickName: string; password: string }) {
+    async register(form: {
+      email: string
+      nickName: string
+      password: string
+    }) {
+      const { $api } = useNuxtApp()
+
       this.isLoading = true
       this.error = null
 
-      const config = useRuntimeConfig()
-      const apiBase = config.public.apiBase
-
       try {
-        const response = await $fetch<{ status: number; message: string; data: RegisterResponse }>(
-          `${apiBase}/v1/users/register`,
-          {
-            method: 'POST',
-            body: {
-              email: form.email,
-              nickName: form.nickName,
-              password: form.password
-            },
-            headers: { 'Content-Type': 'application/json' }
+        const response = await $api<{
+          status: number
+          message: string
+          data: RegisterResponse
+        }>('/v1/users/register', {
+          method: 'POST',
+          body: {
+            email: form.email,
+            nickName: form.nickName,
+            password: form.password
           }
-        )
+        })
 
-        if (!response?.data) throw new Error('Неверный ответ от сервера')
+        if (!response?.data) {
+          throw new Error('Неверный ответ от сервера')
+        }
 
-        // После регистрации логинимся по email
-        return await this.login({ email: form.email, password: form.password })
+        return await this.login({
+          email: form.email,
+          password: form.password
+        })
       } catch (e: any) {
+        console.error('REGISTER ERROR:', e)
         this.error = e?.data?.message || e?.message || 'Ошибка регистрации'
         return { success: false }
       } finally {
@@ -129,6 +142,7 @@ export const useAuthStore = defineStore('auth', {
     logout() {
       localStorage.removeItem('token')
       localStorage.removeItem('user')
+
       this.token = null
       this.user = null
       this.isAuthenticated = false
